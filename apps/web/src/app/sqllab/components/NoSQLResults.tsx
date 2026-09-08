@@ -5,7 +5,7 @@
 
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useTransition } from "react";
 import {
   Search,
   X,
@@ -25,10 +25,32 @@ interface NoSQLResultsProps {
 export function NoSQLResults({ data }: NoSQLResultsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [viewMode, setViewMode] = useState<"tree" | "table">("tree");
-  const [expandAllSignal, setExpandAllSignal] = useState<{
-    expanded: boolean;
-    id: number;
-  } | null>(null);
+  const [bulkAction, setBulkAction] = useState<{
+    type: "initial" | "expand" | "collapse";
+    version: number;
+  }>({
+    type: "initial",
+    version: 0,
+  });
+  const [, startTransition] = useTransition();
+
+  const handleExpandAll = () => {
+    startTransition(() => {
+      setBulkAction((prev) => ({
+        type: "expand",
+        version: prev.version + 1,
+      }));
+    });
+  };
+
+  const handleCollapseAll = () => {
+    startTransition(() => {
+      setBulkAction((prev) => ({
+        type: "collapse",
+        version: prev.version + 1,
+      }));
+    });
+  };
 
   const filteredData = useMemo(() => {
     if (!searchTerm) return data;
@@ -53,7 +75,7 @@ export function NoSQLResults({ data }: NoSQLResultsProps) {
       <div className="p-2.5 px-3 border-b border-border bg-muted/30 flex flex-wrap items-center gap-2.5">
         {/* View Mode Toggle */}
         <div
-          className="flex items-center rounded-md border border-border bg-muted/40 p-0.5"
+          className="inline-flex items-center rounded-md border border-border bg-muted/40 p-0.5 h-7"
           role="group"
           aria-label="Result display mode"
         >
@@ -63,13 +85,13 @@ export function NoSQLResults({ data }: NoSQLResultsProps) {
             aria-pressed={viewMode === "tree"}
             onClick={() => setViewMode("tree")}
             className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer",
+              "inline-flex items-center justify-center gap-1.5 px-2.5 h-6 rounded text-xs font-medium leading-none transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer",
               viewMode === "tree"
                 ? "bg-background text-foreground shadow-xs"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
             )}
           >
-            <FolderTree className="h-3.5 w-3.5" />
+            <FolderTree className="h-3.5 w-3.5 shrink-0" />
             <span>Tree</span>
           </button>
           <button
@@ -78,72 +100,68 @@ export function NoSQLResults({ data }: NoSQLResultsProps) {
             aria-pressed={viewMode === "table"}
             onClick={() => setViewMode("table")}
             className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer",
+              "inline-flex items-center justify-center gap-1.5 px-2.5 h-6 rounded text-xs font-medium leading-none transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer",
               viewMode === "table"
                 ? "bg-background text-foreground shadow-xs"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
             )}
           >
-            <TableProperties className="h-3.5 w-3.5" />
+            <TableProperties className="h-3.5 w-3.5 shrink-0" />
             <span>Table</span>
           </button>
         </div>
 
         {/* Tree Expansion Controls */}
         {viewMode === "tree" && (
-          <div className="flex items-center gap-1">
+          <div className="inline-flex items-center gap-1">
             <button
               type="button"
               aria-label="Expand all"
               title="Expand all documents"
-              onClick={() =>
-                setExpandAllSignal({ expanded: true, id: Date.now() })
-              }
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border border-border bg-background hover:bg-muted/60 text-foreground/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+              onClick={handleExpandAll}
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 h-7 rounded-md text-xs font-medium leading-none border border-border bg-background hover:bg-muted/60 text-foreground/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer shrink-0"
             >
-              <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+              <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span>Expand all</span>
             </button>
             <button
               type="button"
               aria-label="Collapse all"
               title="Collapse all documents"
-              onClick={() =>
-                setExpandAllSignal({ expanded: false, id: Date.now() })
-              }
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border border-border bg-background hover:bg-muted/60 text-foreground/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+              onClick={handleCollapseAll}
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 h-7 rounded-md text-xs font-medium leading-none border border-border bg-background hover:bg-muted/60 text-foreground/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer shrink-0"
             >
-              <ChevronsDownUp className="h-3.5 w-3.5 text-muted-foreground" />
+              <ChevronsDownUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span>Collapse all</span>
             </button>
           </div>
         )}
 
         {/* Search */}
-        <div className="relative flex-1 min-w-[180px] group">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/40 group-focus-within:text-primary transition-colors" />
+        <div className="relative flex-1 min-w-[180px] group flex items-center">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/40 group-focus-within:text-primary transition-colors shrink-0 pointer-events-none" />
           <input
             type="text"
             aria-label="Search documents"
             placeholder="Search documents..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full h-8 pl-9 pr-8 bg-muted/50 border border-border rounded-md text-xs text-foreground/80 placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50 focus:bg-muted transition-all font-mono"
+            className="w-full h-7 pl-8 pr-7 bg-muted/50 border border-border rounded-md text-xs leading-none text-foreground/80 placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50 focus:bg-muted transition-all font-mono"
           />
           {searchTerm && (
             <button
               type="button"
               aria-label="Clear search"
               onClick={() => setSearchTerm("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 hover:text-foreground text-muted-foreground/60 p-0.5 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 hover:text-foreground text-muted-foreground/60 p-0.5 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer shrink-0 inline-flex items-center justify-center"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-3.5 w-3.5 shrink-0" />
             </button>
           )}
         </div>
 
         {/* Counter */}
-        <div className="text-[10px] font-mono font-medium text-muted-foreground whitespace-nowrap">
+        <div className="text-[10px] font-mono font-medium text-muted-foreground whitespace-nowrap leading-none inline-flex items-center h-7">
           {filteredData.length} of {data.length} docs
         </div>
       </div>
@@ -157,17 +175,24 @@ export function NoSQLResults({ data }: NoSQLResultsProps) {
           {filteredData.length > 0 ? (
             filteredData.map((doc, idx) => (
               <NoSQLDocumentNode
-                key={idx}
+                key={`${bulkAction.version}-${doc._id ?? idx}`}
                 data={doc}
                 index={idx}
                 isRoot
                 searchTerm={searchTerm}
-                expandAllSignal={expandAllSignal}
+                defaultExpanded={
+                  bulkAction.type === "expand"
+                    ? true
+                    : bulkAction.type === "collapse"
+                      ? false
+                      : undefined
+                }
+                bulkVersion={bulkAction.version}
               />
             ))
           ) : (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground/30">
-              <Search className="h-8 w-8 mb-3 opacity-20" />
+              <Search className="h-8 w-8 mb-3 opacity-20 shrink-0" />
               <p className="text-xs font-mono uppercase font-bold tracking-wider">
                 No matches found
               </p>

@@ -14,6 +14,8 @@ interface NoSQLDocumentNodeProps {
   index?: number;
   isRoot?: boolean;
   searchTerm?: string;
+  defaultExpanded?: boolean;
+  bulkVersion?: number;
   expandAllSignal?: { expanded: boolean; id: number } | null;
 }
 
@@ -23,26 +25,31 @@ export function NoSQLDocumentNode({
   index,
   isRoot = false,
   searchTerm = "",
+  defaultExpanded,
+  bulkVersion,
   expandAllSignal,
 }: NoSQLDocumentNodeProps) {
   const isObject = data !== null && typeof data === "object";
   const type = Array.isArray(data) ? "array" : typeof data;
 
-  // Open first 5 root documents on initial load, or when searching, or inherit from active expandAllSignal
-  const [isOpen, setIsOpen] = useState(
-    expandAllSignal
-      ? expandAllSignal.expanded
-      : isRoot
-        ? (index ?? 0) < 5 || Boolean(searchTerm)
-        : false,
-  );
-
-  // Synchronize with toolbar Expand all / Collapse all signal
-  useEffect(() => {
-    if (expandAllSignal) {
-      setIsOpen(expandAllSignal.expanded);
+  // Derive initial expansion state: explicit bulk state, search match, or first 5 root documents
+  const [isOpen, setIsOpen] = useState(() => {
+    if (defaultExpanded !== undefined) {
+      return defaultExpanded;
     }
-  }, [expandAllSignal]);
+    if (expandAllSignal) {
+      return expandAllSignal.expanded;
+    }
+    if (isRoot) {
+      return (index ?? 0) < 5 || Boolean(searchTerm);
+    }
+    if (searchTerm && isObject) {
+      return JSON.stringify(data).toLowerCase().includes(searchTerm.toLowerCase());
+    }
+    return false;
+  });
+
+  const [isManual, setIsManual] = useState(false);
 
   // Auto-expand if search term matches children
   useEffect(() => {
@@ -56,6 +63,7 @@ export function NoSQLDocumentNode({
 
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
+    setIsManual(true);
     setIsOpen((prev) => !prev);
   };
 
@@ -120,17 +128,18 @@ export function NoSQLDocumentNode({
 
   return (
     <div
+      data-testid={isRoot ? "nosql-root-node" : undefined}
       className={cn(
         "flex flex-col select-text font-mono text-xs leading-snug",
         isRoot
-          ? "mb-3 border border-border bg-card/60 rounded-lg shadow-xs p-2 transition-colors"
+          ? "mb-3 border border-border bg-card/60 rounded-lg shadow-xs p-2 transition-colors [content-visibility:auto] [contain-intrinsic-size:auto_40px]"
           : "ml-4 border-l border-border/60 pl-1",
       )}
     >
       {isObject ? (
         <div
           className={cn(
-            "flex items-center justify-between py-1 px-2 rounded hover:bg-muted/50 transition-colors group select-text",
+            "flex items-center justify-between py-1 px-2 min-h-[26px] rounded hover:bg-muted/50 transition-colors group select-text leading-none",
             isRoot && "bg-muted/30 mb-1",
           )}
         >
@@ -145,13 +154,15 @@ export function NoSQLDocumentNode({
                   : summary
             }
             onClick={toggle}
-            className="flex-1 min-w-0 flex items-center text-left py-0.5 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+            className="flex-1 min-w-0 inline-flex items-center text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer leading-none"
           >
-            {isOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 mr-1.5 text-muted-foreground/70 shrink-0" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 mr-1.5 text-muted-foreground/70 shrink-0" />
-            )}
+            <div className="w-4 h-4 flex items-center justify-center shrink-0 mr-1.5">
+              {isOpen ? (
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
+              )}
+            </div>
 
             {isRoot ? (
               <span className="font-semibold text-foreground/85 text-xs mr-2 font-mono shrink-0">
@@ -176,13 +187,17 @@ export function NoSQLDocumentNode({
               onClick={copyToClipboard}
               className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1 hover:bg-muted rounded transition-all text-muted-foreground/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring shrink-0 ml-2 cursor-pointer"
             >
-              <Copy className="h-3.5 w-3.5" />
+              <Copy className="h-3.5 w-3.5 shrink-0" />
             </button>
           )}
         </div>
       ) : (
-        <div className="flex items-center py-0.5 px-2 rounded hover:bg-muted/40 transition-colors group select-text text-xs leading-snug">
-          <div className="w-4 shrink-0" />
+        <div className="flex items-center py-1 px-2 min-h-[26px] rounded hover:bg-muted/40 transition-colors group select-text text-xs leading-none">
+          <div
+            data-testid="leaf-spacer"
+            className="w-4 h-4 shrink-0 mr-1.5"
+            aria-hidden="true"
+          />
           {label && (
             <span className="text-muted-foreground font-mono text-xs mr-2 shrink-0">
               {label}:
@@ -195,16 +210,22 @@ export function NoSQLDocumentNode({
               aria-label={`Copy ${label ?? "value"}`}
               title={`Copy ${label ?? "value"}`}
               onClick={copyFieldValue}
-              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-0.5 hover:bg-muted rounded transition-all text-muted-foreground/40 hover:text-foreground shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1 hover:bg-muted rounded transition-all text-muted-foreground/60 hover:text-foreground shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
             >
-              <Copy className="h-2.5 w-2.5" />
+              <Copy className="h-3.5 w-3.5 shrink-0" />
             </button>
           </div>
         </div>
       )}
 
       {isObject && isOpen && (
-        <div className="flex flex-col animate-in fade-in slide-in-from-top-1 duration-150">
+        <div
+          data-testid="nosql-branch-children"
+          className={cn(
+            "flex flex-col",
+            isManual && "animate-in fade-in slide-in-from-top-1 duration-150",
+          )}
+        >
           {isArray
             ? data.map((item: any, idx: number) => (
                 <NoSQLDocumentNode
@@ -213,7 +234,8 @@ export function NoSQLDocumentNode({
                   data={item}
                   index={idx}
                   searchTerm={searchTerm}
-                  expandAllSignal={expandAllSignal}
+                  defaultExpanded={defaultExpanded}
+                  bulkVersion={bulkVersion}
                 />
               ))
             : Object.entries(data).map(([key, val], idx) => (
@@ -223,7 +245,8 @@ export function NoSQLDocumentNode({
                   data={val}
                   index={idx}
                   searchTerm={searchTerm}
-                  expandAllSignal={expandAllSignal}
+                  defaultExpanded={defaultExpanded}
+                  bulkVersion={bulkVersion}
                 />
               ))}
         </div>

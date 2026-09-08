@@ -243,4 +243,94 @@ describe("NoSQLResults", () => {
 
     expect(writeSpy).toHaveBeenCalled();
   });
+
+  it("toolbar controls use consistent inline-flex alignment, compact height, leading-none, and shrink-0 icons", () => {
+    render(<NoSQLResults data={sampleDocuments} />);
+
+    const treeBtn = screen.getByRole("button", { name: /tree/i });
+    const tableBtn = screen.getByRole("button", { name: /table/i });
+    const expandAllBtn = screen.getByRole("button", { name: /expand all/i });
+    const collapseAllBtn = screen.getByRole("button", { name: /collapse all/i });
+
+    for (const btn of [treeBtn, tableBtn, expandAllBtn, collapseAllBtn]) {
+      expect(btn).toHaveClass("inline-flex");
+      expect(btn).toHaveClass("leading-none");
+      expect(btn.className).toMatch(/h-[678]/);
+      const icon = btn.querySelector("svg");
+      expect(icon).toBeInTheDocument();
+      expect(icon).toHaveClass("shrink-0");
+    }
+  });
+
+  it("tree nodes have identical chevron/spacer slot, uniform row padding, and consistent copy button sizing", () => {
+    const { container } = render(<NoSQLResults data={sampleDocuments} />);
+
+    const branchChevron = container.querySelector("button[aria-label*='meta'] svg");
+    expect(branchChevron).toBeInTheDocument();
+    const branchSlot = branchChevron?.parentElement;
+    expect(branchSlot).toHaveClass("w-4");
+    expect(branchSlot).toHaveClass("shrink-0");
+
+    const leafSpacer = container.querySelector("[data-testid='leaf-spacer']");
+    expect(leafSpacer).toBeInTheDocument();
+    expect(leafSpacer).toHaveClass("w-4");
+    expect(leafSpacer).toHaveClass("shrink-0");
+
+    const rootCopyBtn = screen.getAllByRole("button", {
+      name: /copy document/i,
+    })[0];
+    const fieldCopyBtn = screen.getAllByRole("button", {
+      name: /copy name/i,
+    })[0];
+
+    expect(rootCopyBtn).toBeInTheDocument();
+    expect(fieldCopyBtn).toBeInTheDocument();
+
+    const rootCopyIcon = rootCopyBtn.querySelector("svg");
+    const fieldCopyIcon = fieldCopyBtn.querySelector("svg");
+
+    expect(rootCopyIcon).toHaveClass("h-3.5");
+    expect(rootCopyIcon).toHaveClass("w-3.5");
+    expect(fieldCopyIcon).toHaveClass("h-3.5");
+    expect(fieldCopyIcon).toHaveClass("w-3.5");
+  });
+
+  it("root documents use content-visibility containment and bulk expansion bypasses nested animation", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<NoSQLResults data={sampleDocuments} />);
+
+    const rootNodes = container.querySelectorAll("[data-testid='nosql-root-node']");
+    expect(rootNodes.length).toBeGreaterThan(0);
+    expect(rootNodes[0]).toHaveClass("[content-visibility:auto]");
+
+    const expandAllBtn = screen.getByRole("button", { name: /expand all/i });
+    await user.click(expandAllBtn);
+
+    const nestedContainers = container.querySelectorAll("[data-testid='nosql-branch-children']");
+    expect(nestedContainers.length).toBeGreaterThan(0);
+    for (const nested of nestedContainers) {
+      expect(nested).not.toHaveClass("animate-in");
+    }
+  });
+
+  it("bulk actions recursively expand and collapse without per-descendant useEffect updates", async () => {
+    const user = userEvent.setup();
+    render(<NoSQLResults data={sampleDocuments} />);
+
+    const expandAllBtn = screen.getByRole("button", { name: /expand all/i });
+    const collapseAllBtn = screen.getByRole("button", { name: /collapse all/i });
+
+    expect(screen.getByRole("button", { name: /Document 1/i })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /Document 6/i })).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(expandAllBtn);
+    expect(screen.getByRole("button", { name: /Document 6/i })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /details/i })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /config/i })).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(collapseAllBtn);
+    expect(screen.getByRole("button", { name: /Document 1/i })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /Document 6/i })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /details/i })).not.toBeInTheDocument();
+  });
 });
