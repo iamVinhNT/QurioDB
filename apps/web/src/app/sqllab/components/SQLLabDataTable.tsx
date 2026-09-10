@@ -17,6 +17,17 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useSettingsStore } from "@/stores/use-settings-store";
 import { JsonTreeNode } from "./datatable/JsonTreeNode";
+import {
+  TabularResultView,
+  COLUMN_WIDTH_SAMPLE_ROWS,
+  estimateColumnWidths,
+  ROW_INDEX_COLUMN_WIDTH_PX,
+} from "./datatable/TabularResultView";
+
+export {
+  COLUMN_WIDTH_SAMPLE_ROWS,
+  estimateColumnWidths,
+} from "./datatable/TabularResultView";
 
 interface SQLLabDataTableProps {
   columns: string[];
@@ -26,17 +37,6 @@ interface SQLLabDataTableProps {
   onSave?: (changes: Record<number, any>) => void;
   columnMetadata?: any[];
 }
-
-const ROW_INDEX_COLUMN_WIDTH_PX = 48;
-const MIN_DATA_COLUMN_WIDTH_PX = 88;
-const CELL_CHROME_WIDTH_PX = 44;
-const MONOSPACE_CHAR_WIDTH_PX = 8;
-
-/**
- * Column widths are estimates; scanning a bounded row sample keeps the
- * main-thread cost of width calculation independent of result-set size.
- */
-export const COLUMN_WIDTH_SAMPLE_ROWS = 100;
 
 export function parseJsonDetailValue(
   value: unknown,
@@ -56,46 +56,6 @@ function formatCellValue(val: any, nullText: string) {
   if (val === null) return nullText;
   if (typeof val === "object") return JSON.stringify(val);
   return String(val);
-}
-
-function getEstimatedTextUnits(text: string) {
-  let units = 0;
-  for (const char of text) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    units += codePoint >= 0x2e80 ? 2 : 1;
-  }
-  return units;
-}
-
-export function estimateColumnWidths(
-  columns: string[],
-  data: any[],
-  nullText: string,
-) {
-  const maxUnitsByColumn = columns.map((column) =>
-    getEstimatedTextUnits(column),
-  );
-
-  // Avoid whole-dataset scans (and per-object JSON.stringify) on every
-  // dataset change: width estimation is bounded to a row sample.
-  const scanLimit = Math.min(data.length, COLUMN_WIDTH_SAMPLE_ROWS);
-  for (let rowIndex = 0; rowIndex < scanLimit; rowIndex++) {
-    const row = data[rowIndex];
-    columns.forEach((column, index) => {
-      const value = formatCellValue(row?.[column], nullText);
-      const units = getEstimatedTextUnits(value);
-      if (units > maxUnitsByColumn[index]) {
-        maxUnitsByColumn[index] = units;
-      }
-    });
-  }
-
-  return maxUnitsByColumn.map((units) =>
-    Math.max(
-      MIN_DATA_COLUMN_WIDTH_PX,
-      Math.ceil(units * MONOSPACE_CHAR_WIDTH_PX) + CELL_CHROME_WIDTH_PX,
-    ),
-  );
 }
 
 export interface ResultFilteredRow {
@@ -286,172 +246,209 @@ export function SQLLabDataTable({
           {rowCount} of {data.length} {mini ? "" : "rows"}
         </div>
       </div>
-      <div
-        ref={parentRef}
-        className="flex-1 relative overflow-auto scrollbar-thin bg-background"
-      >
-        <table
-          className="min-w-full text-sm border-collapse table-fixed font-mono"
-          style={{ width: `${tableWidth}px` }}
+      {editable ? (
+        <div
+          ref={parentRef}
+          className="flex-1 relative overflow-auto scrollbar-thin bg-background"
         >
-          <colgroup>
-            <col style={{ width: `${ROW_INDEX_COLUMN_WIDTH_PX}px` }} />
-            {columns.map((col, i) => (
-              <col
-                key={`${col}-${i}`}
-                style={{ width: `${columnWidths[i]}px` }}
-              />
-            ))}
-          </colgroup>
-          <thead className="sticky top-0 bg-background/95 backdrop-blur-md shadow-sm z-50">
-            <tr>
-              <th className="border-b border-r p-1 text-[9px] text-muted-foreground font-black w-12 text-center bg-muted/20 sticky left-0 z-51 uppercase tracking-tighter">
-                #
-              </th>
+          <table
+            className="min-w-full text-sm border-collapse table-fixed font-mono"
+            style={{ width: `${tableWidth}px` }}
+          >
+            <colgroup>
+              <col style={{ width: `${ROW_INDEX_COLUMN_WIDTH_PX}px` }} />
               {columns.map((col, i) => (
-                <th
+                <col
                   key={`${col}-${i}`}
-                  className={cn(
-                    "border-b border-r pt-3 pb-2 px-3 text-left font-black text-[11px] bg-muted/5 transition-colors hover:bg-muted/10 group select-text uppercase tracking-tighter whitespace-nowrap",
-                    mini ? "px-2" : "px-3",
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span>{col}</span>
-                    <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-30 shrink-0" />
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/30">
-            {virtualRows.length > 0 && virtualRows[0].start > 0 && (
-              <tr>
-                <td
-                  colSpan={columns.length + 1}
-                  style={{ height: `${virtualRows[0].start}px` }}
+                  style={{ width: `${columnWidths[i]}px` }}
                 />
+              ))}
+            </colgroup>
+            <thead className="sticky top-0 bg-background/95 backdrop-blur-md shadow-sm z-50">
+              <tr>
+                <th className="border-b border-r p-1 text-[9px] text-muted-foreground font-black w-12 text-center bg-muted/20 sticky left-0 z-51 uppercase tracking-tighter">
+                  #
+                </th>
+                {columns.map((col, i) => (
+                  <th
+                    key={`${col}-${i}`}
+                    className={cn(
+                      "border-b border-r pt-3 pb-2 px-3 text-left font-black text-[11px] bg-muted/5 transition-colors hover:bg-muted/10 group select-text uppercase tracking-tighter whitespace-nowrap",
+                      mini ? "px-2" : "px-3",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{col}</span>
+                      <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-30 shrink-0" />
+                    </div>
+                  </th>
+                ))}
               </tr>
-            )}
-            {virtualRows.map((virtualRow) => {
-              const i = virtualRow.index;
-              const originalIndex = filteredRows
-                ? filteredRows[i]._originalIndex
-                : i;
-              return (
-                <tr
-                  key={virtualRow.key}
-                  data-index={i}
-                  className="hover:bg-primary/4 group transition-all duration-75 odd:bg-muted/5"
-                  style={{ height: `${virtualRow.size}px` }}
-                >
-                  <td className="border-r p-1.5 text-[10px] text-muted-foreground/60 font-black text-center sticky left-0 bg-background group-hover:bg-background/80 z-1 transition-colors">
-                    {i + 1}
-                  </td>
-                  {columns.map((col, j) => {
-                    const val = getCellValue(originalIndex, col);
-                    const isEdited =
-                      pendingChanges[originalIndex] && col in pendingChanges[originalIndex];
-                    const jsonDetailValue = parseJsonDetailValue(val);
-                    const isObject = jsonDetailValue !== null;
-                    const isEditing =
-                      editingCell?.rowIndex === originalIndex &&
-                      editingCell?.colName === col;
-
-                    return (
-                      <td
-                        key={j}
-                        className={cn(
-                          "border-r p-2 text-[11px] font-medium whitespace-nowrap border-border/20 transition-all select-text relative",
-                          mini ? "p-1.5" : "p-2.5",
-                          isObject &&
-                          "cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors",
-                          isEdited && !isEditing && "bg-amber-500/10",
-                          isEditing && "p-0",
-                        )}
-                        title={isEditing ? "" : displayValue(val)}
-                        onClick={() => {
-                          if (isObject) {
-                            setSelectedJson({ key: col, value: jsonDetailValue });
-                          }
-                        }}
-                        onDoubleClick={() => {
-                          if (isColumnEditable(col) && !isObject) {
-                            setEditingCell({ rowIndex: originalIndex, colName: col });
-                          }
-                        }}
-                      >
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            className="w-full h-full bg-background border-2 border-primary px-2 py-1 outline-none text-[11px]"
-                            value={val === null ? "" : String(val)}
-                            onChange={(e) =>
-                              handleCellChange(originalIndex, col, e.target.value)
-                            }
-                            onBlur={() => setEditingCell(null)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") setEditingCell(null);
-                              if (e.key === "Escape") setEditingCell(null);
-                            }}
-                          />
-                        ) : (
-                          <div>
-                            {val === null ? (
-                              <span className="text-muted-foreground/40 italic font-black uppercase tracking-widest text-[9px]">
-                                {showNullAs}
-                              </span>
-                            ) : typeof val === "boolean" ? (
-                              <span
-                                className={cn(
-                                  "text-[9px] font-black px-1.5 py-0.5 rounded-sm uppercase tracking-tighter",
-                                  val
-                                    ? "text-emerald-700 bg-emerald-100/50"
-                                    : "text-red-700 bg-red-100/50",
-                                )}
-                              >
-                                {String(val)}
-                              </span>
-                            ) : (
-                              <span
-                                className={cn(
-                                  "text-foreground/90",
-                                  isEdited && "text-amber-600 font-bold",
-                                )}
-                              >
-                                {displayValue(val)}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-            {virtualRows.length > 0 &&
-              totalSize - virtualRows[virtualRows.length - 1].end > 0 && (
+            </thead>
+            <tbody className="divide-y divide-border/30">
+              {virtualRows.length > 0 && virtualRows[0].start > 0 && (
                 <tr>
                   <td
                     colSpan={columns.length + 1}
-                    style={{
-                      height: `${totalSize - virtualRows[virtualRows.length - 1].end}px`,
-                    }}
+                    style={{ height: `${virtualRows[0].start}px` }}
                   />
                 </tr>
               )}
-          </tbody>
-        </table>
-        {rowCount === 0 && (
-          <div className="flex flex-col items-center justify-center h-64 text-muted-foreground/20">
-            <Search className="h-8 w-8 mb-4 opacity-10" />
-            <p className="text-[10px] uppercase font-black tracking-widest">
-              No matching rows found
-            </p>
-          </div>
-        )}
-      </div>
+              {virtualRows.map((virtualRow) => {
+                const i = virtualRow.index;
+                const originalIndex = filteredRows
+                  ? filteredRows[i]._originalIndex
+                  : i;
+                return (
+                  <tr
+                    key={virtualRow.key}
+                    data-index={i}
+                    className="hover:bg-primary/4 group transition-all duration-75 odd:bg-muted/5"
+                    style={{ height: `${virtualRow.size}px` }}
+                  >
+                    <td className="border-r p-1.5 text-[10px] text-muted-foreground/60 font-black text-center sticky left-0 bg-background group-hover:bg-background/80 z-1 transition-colors">
+                      {i + 1}
+                    </td>
+                    {columns.map((col, j) => {
+                      const val = getCellValue(originalIndex, col);
+                      const isEdited =
+                        pendingChanges[originalIndex] && col in pendingChanges[originalIndex];
+                      const jsonDetailValue = parseJsonDetailValue(val);
+                      const isObject = jsonDetailValue !== null;
+                      const isEditing =
+                        editingCell?.rowIndex === originalIndex &&
+                        editingCell?.colName === col;
+
+                      return (
+                        <td
+                          key={j}
+                          className={cn(
+                            "border-r p-2 text-[11px] font-medium whitespace-nowrap border-border/20 transition-all select-text relative",
+                            mini ? "p-1.5" : "p-2.5",
+                            isObject &&
+                            "cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors",
+                            isEdited && !isEditing && "bg-amber-500/10",
+                            isEditing && "p-0",
+                          )}
+                          title={isEditing ? "" : displayValue(val)}
+                          onClick={() => {
+                            if (isObject) {
+                              setSelectedJson({ key: col, value: jsonDetailValue });
+                            }
+                          }}
+                          onDoubleClick={() => {
+                            if (isColumnEditable(col) && !isObject) {
+                              setEditingCell({ rowIndex: originalIndex, colName: col });
+                            }
+                          }}
+                        >
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="w-full h-full bg-background border-2 border-primary px-2 py-1 outline-none text-[11px]"
+                              value={val === null ? "" : String(val)}
+                              onChange={(e) =>
+                                handleCellChange(originalIndex, col, e.target.value)
+                              }
+                              onBlur={() => setEditingCell(null)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") setEditingCell(null);
+                                if (e.key === "Escape") setEditingCell(null);
+                              }}
+                            />
+                          ) : (
+                            <div>
+                              {val === null ? (
+                                <span className="text-muted-foreground/40 italic font-black uppercase tracking-widest text-[9px]">
+                                  {showNullAs}
+                                </span>
+                              ) : typeof val === "boolean" ? (
+                                <span
+                                  className={cn(
+                                    "text-[9px] font-black px-1.5 py-0.5 rounded-sm uppercase tracking-tighter",
+                                    val
+                                      ? "text-emerald-700 bg-emerald-100/50"
+                                      : "text-red-700 bg-red-100/50",
+                                  )}
+                                >
+                                  {String(val)}
+                                </span>
+                              ) : (
+                                <span
+                                  className={cn(
+                                    "text-foreground/90",
+                                    isEdited && "text-amber-600 font-bold",
+                                  )}
+                                >
+                                  {displayValue(val)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              {virtualRows.length > 0 &&
+                totalSize - virtualRows[virtualRows.length - 1].end > 0 && (
+                  <tr>
+                    <td
+                      colSpan={columns.length + 1}
+                      style={{
+                        height: `${totalSize - virtualRows[virtualRows.length - 1].end}px`,
+                      }}
+                    />
+                  </tr>
+                )}
+            </tbody>
+          </table>
+          {rowCount === 0 && (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground/20">
+              <Search className="h-8 w-8 mb-4 opacity-10" />
+              <p className="text-[10px] uppercase font-black tracking-widest">
+                No matching rows found
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <TabularResultView
+          columns={columns}
+          data={data}
+          virtualRows={virtualRows}
+          totalSize={totalSize}
+          scrollRef={parentRef}
+          columnWidths={columnWidths}
+          tableWidth={tableWidth}
+          mini={mini}
+          getRowIndex={(i) => (filteredRows ? filteredRows[i]._originalIndex : i)}
+          onCellClick={(col, val) => {
+            const jsonDetailValue = parseJsonDetailValue(val);
+            if (jsonDetailValue !== null) {
+              setSelectedJson({ key: col, value: jsonDetailValue });
+            }
+          }}
+          getCellClassName={(col, val) => {
+            const isJson = parseJsonDetailValue(val) !== null;
+            return isJson
+              ? "cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+              : undefined;
+          }}
+          nullText={showNullAs}
+          emptyContent={
+            rowCount === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-muted-foreground/20">
+                <Search className="h-8 w-8 mb-4 opacity-10" />
+                <p className="text-[10px] uppercase font-black tracking-widest">
+                  No matching rows found
+                </p>
+              </div>
+            ) : undefined
+          }
+        />
+      )}
 
       <Dialog
         open={!!selectedJson}
