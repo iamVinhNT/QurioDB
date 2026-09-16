@@ -148,6 +148,81 @@ def test_mongo_query_policy_adds_bounded_limit_and_timeout():
     assert spec.options["maxTimeMS"] == 30000
 
 
+@pytest.mark.parametrize(
+    ("operator", "value"),
+    [
+        ("$elemMatch", {"sku": "A-1"}),
+        ("$all", [{"$elemMatch": {"sku": "A-1"}}]),
+        ("$size", 1),
+    ],
+)
+def test_mongodb_field_allowlist_keeps_safe_array_parent_for_filters(operator, value):
+    allowlist = build_mongodb_field_allowlist(
+        {
+            "orders": [
+                {"name": "items", "isArray": True},
+                {"name": "items.sku"},
+            ]
+        }
+    )
+
+    spec = MongoQueryPolicy(
+        known_collections={"orders"},
+        field_allowlist=allowlist,
+        array_field_allowlist={"orders": {"items"}},
+    ).validate(
+        MongoQuerySpec.from_payload(
+            {
+                "operation": "find",
+                "collection": "orders",
+                "filter": {"items": {operator: value}},
+            }
+        )
+    )
+
+    assert spec.filter == {"items": {operator: value}}
+    assert "items" in allowlist["orders"]
+
+
+def test_mongodb_field_allowlist_rejects_array_parent_with_sensitive_descendant():
+    allowlist = build_mongodb_field_allowlist(
+        {
+            "orders": [
+                {"name": "items", "isArray": True},
+                {"name": "items.password"},
+            ]
+        }
+    )
+
+    assert "items" not in allowlist["orders"]
+    assert all("password" not in path for path in allowlist["orders"])
+
+    with pytest.raises(MongoQueryPolicyError, match="unknown field"):
+        MongoQueryPolicy(
+            known_collections={"orders"},
+            field_allowlist=allowlist,
+            array_field_allowlist={"orders": {"items"}},
+        ).validate(
+            MongoQuerySpec.from_payload(
+                {
+                    "operation": "find",
+                    "collection": "orders",
+                    "filter": {"items": {"$size": 1}},
+                }
+            )
+        )
+
+
+def test_mongodb_array_parent_is_not_used_for_leaf_only_projection():
+    spec = MongoQueryPolicy(
+        known_collections={"orders"},
+        field_allowlist={"orders": {"_id", "items", "items.sku"}},
+        array_field_allowlist={"orders": {"items"}},
+    ).validate(MongoQuerySpec.from_payload({"operation": "find", "collection": "orders"}))
+
+    assert spec.projection == {"_id": 1, "items.sku": 1}
+
+
 def test_mongo_query_policy_rejects_unknown_collection_when_metadata_is_available():
     spec = MongoQuerySpec.from_payload({"operation": "find", "collection": "users"})
 

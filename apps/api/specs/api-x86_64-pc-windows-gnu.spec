@@ -3,6 +3,15 @@
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 
+def _filter_sensitive_bundle_data(entries):
+    sensitive_markers = (".env", ".env.", ".pem", ".key", "credential", "secret", "password", "token")
+    return [
+        entry
+        for entry in entries
+        if not any(marker in str(entry).replace("\\", "/").lower() for marker in sensitive_markers)
+    ]
+
+
 a = Analysis(
     ['../app.py'],
     pathex=[],
@@ -32,6 +41,7 @@ a = Analysis(
     excludes=[],
     noarchive=False,
 )
+datas = _filter_sensitive_bundle_data(datas)
 pyz = PYZ(a.pure)
 
 exe = EXE(

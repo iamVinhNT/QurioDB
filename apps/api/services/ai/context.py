@@ -6,7 +6,9 @@ and sample data injection.
 """
 import logging
 import os
+import re
 from dataclasses import dataclass
+
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 from sqlalchemy import text
@@ -21,6 +23,7 @@ from .mongodb_query import (
     build_mongodb_field_allowlist,
     is_sensitive_mongo_field,
     normalize_mongo_field_path,
+    redact_mongo_sensitive_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -295,10 +298,37 @@ class SchemaContextService:
         return requested_database, accessible_databases
 
     def _get_mongodb_indexes(self, db_id: str, schema: str, collection: str) -> List[str]:
-        """Read index names defensively for MongoDB prompt grounding."""
+        """Read non-sensitive index names defensively for MongoDB prompt grounding."""
         try:
             indexes = metadata_service.get_indexes(db_id, schema, collection)
-            return [str(index.get("indexname") or index.get("name")) for index in indexes]
+            safe_indexes = []
+            for raw_index in indexes:
+                index = redact_mongo_sensitive_payload(raw_index)
+                if not isinstance(index, dict):
+                    continue
+                index_name = str(index.get("indexname") or index.get("name") or "")
+                index_definition = index.get("indexdef")
+                index_key = index.get("key")
+                if isinstance(index_definition, str):
+                    key_paths = re.findall(
+                        r"[A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)*",
+                        index_definition,
+                    )
+                elif isinstance(index_definition, dict):
+                    key_paths = [str(path) for path in index_definition]
+                elif isinstance(index_key, dict):
+                    key_paths = [str(path) for path in index_key]
+                else:
+                    key_paths = []
+                if not key_paths:
+                    continue
+                if (
+                    index_name
+                    and not is_sensitive_mongo_field(index_name)
+                    and not any(is_sensitive_mongo_field(path) for path in key_paths)
+                ):
+                    safe_indexes.append(index_name)
+            return safe_indexes
         except Exception as exc:
             logger.debug("MongoDB index context unavailable for %s: %s", collection, exc)
             return []

@@ -3,6 +3,15 @@
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 
+def _filter_sensitive_bundle_data(entries):
+    sensitive_markers = (".env", ".env.", ".pem", ".key", "credential", "secret", "password", "token")
+    return [
+        entry
+        for entry in entries
+        if not any(marker in str(entry).replace("\\", "/").lower() for marker in sensitive_markers)
+    ]
+
+
 block_cipher = None
 
 
@@ -12,6 +21,11 @@ a = Analysis(
     binaries=collect_dynamic_libs('sqlite_vec'),
     datas=[],
     hiddenimports=[
+        'uvicorn.logging',
+        'uvicorn.loops.auto',
+        'uvicorn.protocols.http.auto',
+        'uvicorn.protocols.websockets.auto',
+        'uvicorn.lifespan.on',
         'passlib.handlers.bcrypt',
         'bcrypt',
         'jwt',
@@ -38,6 +52,7 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+datas = _filter_sensitive_bundle_data(datas)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

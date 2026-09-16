@@ -77,6 +77,52 @@ def test_schema_context_uses_mongodb_collection_vocabulary(monkeypatch):
     assert result.array_field_allowlist == {"orders": ("items.sku",)}
 
 
+def test_schema_context_omits_sensitive_mongodb_indexes_but_keeps_safe_indexes(monkeypatch):
+    service = SchemaContextService()
+    monkeypatch.setattr(
+        "services.ai.context.metadata_service.get_all_columns",
+        lambda *_: {"orders": [{"name": "status", "type": "str", "nullable": True}]},
+    )
+    monkeypatch.setattr("services.ai.context.metadata_service.get_schemas", lambda *_: ["analytics"])
+    monkeypatch.setattr(
+        "services.ai.context.BaseDatabaseService.get_db_config",
+        lambda *_: ("mongodb", {"database": "analytics"}),
+    )
+    monkeypatch.setattr(
+        "services.ai.context.metadata_service.get_indexes",
+        lambda *_: [
+            {
+                "indexname": "status_idx",
+                "indexdef": "{'status': 1}",
+                "key": {"status": 1},
+            },
+            {
+                "indexname": "password_idx",
+                "indexdef": "{'status': 1}",
+                "key": {"status": 1},
+            },
+            {
+                "indexname": "profile_idx",
+                "indexdef": "{'profile.password': 1}",
+                "key": {"profile.password": 1},
+            },
+            {
+                "name": "secret_idx",
+                "key": {"apiKey": 1},
+                "indexdef": "{'apiKey': 1}",
+            },
+        ],
+    )
+
+    result = service.build_schema_context("db1", "analytics", database_type="mongodb")
+
+    assert "status_idx" in result.context
+    assert "password_idx" not in result.context
+    assert "profile.password" not in result.context
+    assert "secret_idx" not in result.context
+    assert "apiKey" not in result.context
+
+
 def test_schema_context_rejects_database_not_reported_by_mongodb_server(monkeypatch):
     service = SchemaContextService()
     monkeypatch.setattr(

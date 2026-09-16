@@ -12,6 +12,7 @@ import path from 'path';
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const SRC_TAURI = path.join(__dirname, '..', 'src-tauri');
 const API_DIR = path.join(PROJECT_ROOT, 'api');
+const API_SPECS_DIR = path.join(API_DIR, 'specs');
 const DESKTOP_RUNTIME_PATH = path.join(API_DIR, 'core', 'desktop_runtime.py');
 
 describe('Desktop Configuration', () => {
@@ -70,6 +71,53 @@ describe('Desktop Configuration', () => {
       const resources: string[] = config.bundle.resources || [];
       const hasDocker = resources.some((r) => r.includes('docker-compose'));
       expect(hasDocker).toBe(false);
+    });
+
+    it('should not bundle environment files or secret-bearing resources', () => {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      const resources: string[] = config.bundle.resources || [];
+
+      expect(resources.some((resource) => /(^|[/\\])\.env$/.test(resource))).toBe(false);
+      expect(JSON.stringify(config.bundle)).not.toContain('.env');
+    });
+
+    it('should include Uvicorn dynamic imports in the Windows MSVC sidecar spec', () => {
+      const spec = fs.readFileSync(
+        path.join(API_DIR, 'specs', 'api-x86_64-pc-windows-msvc.spec'),
+        'utf-8',
+      );
+
+      for (const moduleName of [
+        'uvicorn.logging',
+        'uvicorn.loops.auto',
+        'uvicorn.protocols.http.auto',
+        'uvicorn.protocols.websockets.auto',
+        'uvicorn.lifespan.on',
+      ]) {
+        expect(spec).toContain(`'${moduleName}'`);
+      }
+    });
+
+    it('should filter sensitive files from every shipped PyInstaller spec', () => {
+      const specs = fs
+        .readdirSync(API_SPECS_DIR)
+        .filter((name) => /^api-.*\.spec$/.test(name));
+
+      expect(specs).toEqual([
+        'api-x86_64-pc-windows-gnu.spec',
+        'api-x86_64-pc-windows-msvc.spec',
+        'api-x86_64-unknown-linux-gnu.spec',
+      ]);
+
+      for (const specName of specs) {
+        const spec = fs.readFileSync(path.join(API_SPECS_DIR, specName), 'utf-8');
+        expect(spec).toContain('_filter_sensitive_bundle_data');
+        expect(spec).toContain('datas = _filter_sensitive_bundle_data(datas)');
+        expect(spec).toContain('.env.');
+        expect(spec).toContain('.pem');
+        expect(spec).toContain('.key');
+        expect(spec).toContain('credential');
+      }
     });
   });
 

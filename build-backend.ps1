@@ -1,4 +1,4 @@
-# Build script for packaging the Python Flask backend as a sidecar executable.
+# Build script for packaging the Python FastAPI backend as a sidecar executable.
 # Supports both x86_64-pc-windows-gnu and x86_64-pc-windows-msvc targets.
 #
 # Usage:
@@ -20,38 +20,38 @@ $TARGET_TRIPLE = if ($Target -eq "msvc") {
 
 Write-Host "=== Building Python Backend Sidecar for $TARGET_TRIPLE ===" -ForegroundColor Cyan
 
-$API_DIR = "apps/api"
-$DEST_DIR = "apps/desktop/src-tauri/bin"
+$REPO_ROOT = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+$API_DIR = Join-Path $REPO_ROOT "apps/api"
+$DEST_DIR = Join-Path $REPO_ROOT "apps/desktop/src-tauri/bin"
 
 # Install dependencies
 Write-Host "[1/4] Installing Python dependencies..." -ForegroundColor Yellow
-Set-Location $API_DIR
-& ./venv/Scripts/python -m pip install -r requirements.txt --quiet
-& ./venv/Scripts/python -m pip install pyinstaller --quiet
+Push-Location -LiteralPath $API_DIR
+try {
+    & ./venv/Scripts/python -m pip install -r requirements.txt --quiet
+    & ./venv/Scripts/python -m pip install pyinstaller --quiet
 
-# Build with PyInstaller
-Write-Host "[2/4] Running PyInstaller..." -ForegroundColor Yellow
-$SPEC_FILE = "specs/api-$TARGET_TRIPLE.spec"
+    # Build with PyInstaller
+    Write-Host "[2/4] Running PyInstaller..." -ForegroundColor Yellow
+    $SPEC_FILE = "specs/api-$TARGET_TRIPLE.spec"
 
-if (Test-Path $SPEC_FILE) {
-    Write-Host "Using existing spec file: $SPEC_FILE"
-    & ./venv/Scripts/python -m PyInstaller $SPEC_FILE --noconfirm
-} else {
-    Write-Host "No spec file found, building with default options..."
-    & ./venv/Scripts/python -m PyInstaller --onefile --noconsole --name "api-$TARGET_TRIPLE" app.py --noconfirm
+    if (Test-Path $SPEC_FILE) {
+        Write-Host "Using existing spec file: $SPEC_FILE"
+        & ./venv/Scripts/python -m PyInstaller $SPEC_FILE --noconfirm
+    } else {
+        Write-Host "No spec file found, building with default options..."
+        & ./venv/Scripts/python -m PyInstaller --onefile --noconsole --name "api-$TARGET_TRIPLE" app.py --noconfirm
+    }
+
+    # Create destination directory and copy the executable.
+    Write-Host "[3/4] Copying binary..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Path $DEST_DIR -Force | Out-Null
+    Copy-Item "dist/api-$TARGET_TRIPLE.exe" (Join-Path $DEST_DIR "api-$TARGET_TRIPLE.exe") -Force
 }
-
-# Create destination directory
-Write-Host "[3/4] Copying binary..." -ForegroundColor Yellow
-if (-not (Test-Path "../../$DEST_DIR")) {
-    New-Item -ItemType Directory -Path "../../$DEST_DIR" -Force | Out-Null
+finally {
+    Pop-Location
 }
-
-# Copy the built executable
-Copy-Item "dist/api-$TARGET_TRIPLE.exe" "../../$DEST_DIR/api-$TARGET_TRIPLE.exe" -Force
 
 Write-Host "[4/4] Done!" -ForegroundColor Green
-Write-Host "Output: $DEST_DIR/api-$TARGET_TRIPLE.exe" -ForegroundColor Green
-
-# Return to original directory
-Set-Location ../..
+$OUTPUT_PATH = Join-Path $DEST_DIR "api-$TARGET_TRIPLE.exe"
+Write-Host "Output: $OUTPUT_PATH" -ForegroundColor Green

@@ -1,0 +1,247 @@
+# @file release-desktop.yml
+# @description Build native Tauri desktop bundles and publish a stable release for semver tags.
+
+name: Release desktop
+
+on:
+  push:
+    tags:
+      - v*.*.*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to validate and package without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Validate tag matches tracked version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ ! "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              printf 'Release tags must match vX.Y.Z exactly: %s\n' "$REQUESTED_VERSION" >&2
+              exit 1
+            fi
+            VERSION="${REQUESTED_VERSION#v}"
+          else
+            if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              printf 'Manual versions must match X.Y.Z exactly: %s\n' "$REQUESTED_VERSION" >&2
+              exit 1
+            fi
+            VERSION="$REQUESTED_VERSION"
+          fi
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'QURIODB_VERSION=%s\n' "$VERSION" > .env
+          bun run version:check
+
+  build-windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare version and Python environment
+        shell: pwsh
+        run: |
+          "QURIODB_VERSION=$env:RELEASE_VERSION" | Set-Content -NoNewline .env
+          python -m venv apps/api/venv
+      - name: Install JavaScript dependencies and validate version
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          bun run version:check
+      - name: Build Windows FastAPI sidecar
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File ./build-backend.ps1 -Target msvc
+          if (-not (Test-Path 'apps/desktop/src-tauri/bin/api-x86_64-pc-windows-msvc.exe')) {
+            throw 'Expected Windows MSVC sidecar was not produced'
+          }
+      - name: Smoke-test Windows FastAPI sidecar
+        shell: pwsh
+        run: |
+          $binary = Join-Path $pwd 'apps/desktop/src-tauri/bin/api-x86_64-pc-windows-msvc.exe'
+          $port = python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+          $env:QURIODB_DESKTOP_PORT = $port.Trim()
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $binary -PassThru
+            $healthy = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              if ($process.HasExited) {
+                throw "Windows sidecar exited with code $($process.ExitCode)"
+              }
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($env:QURIODB_DESKTOP_PORT)/health"
+                if ($response.StatusCode -eq 200) {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $healthy) {
+              throw 'Windows sidecar did not return a healthy /health response'
+            }
+          } finally {
+            if ($process -and -not $process.HasExited) {
+              & taskkill.exe /F /T /PID $process.Id | Out-Null
+            }
+            Remove-Item Env:QURIODB_DESKTOP_PORT -ErrorAction SilentlyContinue
+          }
+      - name: Build Windows MSI and NSIS bundles
+        shell: pwsh
+        run: |
+          Set-Location apps/desktop
+          bun run tauri build --target x86_64-pc-windows-msvc
+      - name: Collect Windows release assets
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_VERSION
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item "apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/QurioDB_${version}_x64_en-US.msi" release-assets/
+          Copy-Item "apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/QurioDB_${version}_x64-setup.exe" release-assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-linux:
+    needs: validate
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Prepare version and Python environment
+        shell: bash
+        run: |
+          VERSION="$RELEASE_VERSION"
+          printf 'QURIODB_VERSION=%s\n' "$VERSION" > .env
+          python -m venv apps/api/venv
+      - name: Install JavaScript dependencies and validate version
+        run: |
+          bun install --frozen-lockfile
+          bun run version:check
+      - name: Build Linux FastAPI sidecar
+        run: |
+          bash apps/desktop/scripts/build-sidecar.sh
+          test -x apps/desktop/src-tauri/bin/api-x86_64-unknown-linux-gnu
+      - name: Smoke-test Linux FastAPI sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY="apps/desktop/src-tauri/bin/api-x86_64-unknown-linux-gnu"
+          PORT="$(python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          export QURIODB_DESKTOP_PORT="$PORT"
+          cleanup() {
+            if [[ -n "${SIDECAR_PID:-}" ]] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
+              kill "$SIDECAR_PID" 2>/dev/null || true
+              wait "$SIDECAR_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          "$BINARY" >"$RUNNER_TEMP/quriodb-sidecar.log" 2>&1 &
+          SIDECAR_PID=$!
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error "http://127.0.0.1:$PORT/health" >/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+              printf 'Linux sidecar exited before /health became ready\n' >&2
+              exit 1
+            fi
+            sleep 0.5
+          done
+          printf 'Linux sidecar did not return a healthy /health response\n' >&2
+          exit 1
+      - name: Build Linux DEB and AppImage bundles
+        run: |
+          bun run version:sync
+          (cd apps/desktop && bun run tauri build --target x86_64-unknown-linux-gnu)
+      - name: Collect Linux release assets
+        shell: bash
+        run: |
+          VERSION="$RELEASE_VERSION"
+          mkdir -p release-assets
+          cp "apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/QurioDB_${VERSION}_amd64.deb" release-assets/
+          cp "apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/QurioDB_${VERSION}_amd64.AppImage" release-assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-linux]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-release-assets'
+          merge-multiple: true
+          path: release-assets
+      - name: Verify release tag is unused and points to this workflow commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'Release already exists; refusing to modify or overwrite %s\n' "$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          remote_sha="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$GITHUB_REF_NAME^{}" | awk 'NR == 1 {print $1}')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$GITHUB_REF_NAME" | awk 'NR == 1 {print $1}')"
+          fi
+          if [[ -z "$remote_sha" || "$remote_sha" != "$GITHUB_SHA" ]]; then
+            printf 'Release tag %s does not resolve to workflow commit %s (got %s)\n' "$GITHUB_REF_NAME" "$GITHUB_SHA" "${remote_sha:-missing}" >&2
+            exit 1
+          fi
+
+      - name: Create stable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --title "release-v$VERSION" \
+            --verify-tag \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes

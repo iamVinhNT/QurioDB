@@ -12,7 +12,7 @@ This rule applies to every repository code change.
 - Read the required project context for the touched area:
   - `Project-Context.md`
   - `README.md`
-  - Relevant `.codex/rules/*`
+  - Relevant `.agents/rules/*`
 - Inspect existing code paths before choosing an implementation.
 - Prefer existing patterns, helpers, schemas, and service boundaries over new abstractions.
 - Identify the smallest safe change that fixes the requested behavior.

@@ -39,13 +39,16 @@ Ensure you have the following installed on your Windows system:
 Chạy lệnh duy nhất sau từ **thư mục gốc** của repository:
 
 ```powershell
-# Chạy toàn bộ quy trình: Build Backend -> Build Frontend -> Đóng gói Tauri
-bun run desktop:dist
+# Windows: Build Backend -> Build Frontend -> Đóng gói Tauri
+bun run desktop:build
+
+# Linux: Build Backend -> Build Frontend -> Đóng gói Tauri
+bun run desktop:build:linux
 ```
 
 **Lệnh này thực hiện:**
 
-1.  **Build BE**: Sử dụng PyInstaller để đóng gói Python API (thông qua `build-backend.ps1`).
+1.  **Build BE**: Sử dụng PyInstaller để đóng gói Python API (thông qua `build-backend.ps1` trên Windows hoặc `build-sidecar.sh` trên Linux).
 2.  **Copy BE**: Di chuyển file `api-*.exe` vào thư mục sidecar của Tauri (`src-tauri/bin/`).
 3.  **Build FE**: Chạy `bun run build` của ứng dụng Web (`apps/web/dist/`).
 4.  **Tauri Bundle**: Biên dịch lõi Rust và đóng gói tất cả vào một trình cài đặt duy nhất.
@@ -87,7 +90,7 @@ After a successful build, you can find the installers here:
 ## ⚙️ Configuration Notes
 
 - **Sidecars**: Configured in `tauri.conf.json` under `bundle.externalBin`.
-- **Resources**: The `.env` file is included via the `bundle.resources` array.
+- **Resources**: Environment files and credential-bearing files are not bundled. Desktop runtime settings are passed directly to the sidecar by Tauri.
 - **SQLite Database**: Database hệ thống được lưu tại `%APPDATA%\QurioDB\quriodb.db`. Để app cài đặt có dữ liệu mới nhất, bạn cần copy file DB từ môi trường dev vào đường dẫn này.
 - **Icon**: The desktop app uses the system's QurioDB logo. Icons are managed in `src-tauri/icons/`.
 
@@ -125,4 +128,4 @@ If you make any changes to the Python code in `apps/api/`, those changes **will 
 
 ---
 
-_QurioDB Team - v0.1.1_
+_QurioDB Team - v0.1.3_

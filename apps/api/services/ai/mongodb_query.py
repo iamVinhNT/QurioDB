@@ -274,13 +274,29 @@ def build_mongodb_field_allowlist(
             path = normalize_mongo_field_path(raw_name.strip())
             if path and "[]" not in path:
                 raw_paths.add(path)
+        array_parents = {
+            normalize_mongo_field_path(field["name"].strip())
+            for field in fields
+            if isinstance(field, Mapping)
+            and field.get("isArray") is True
+            and isinstance(field.get("name"), str)
+            and field["name"].strip()
+        }
         paths = {
             path
             for path in raw_paths
             if not is_sensitive_mongo_field(path)
-            and not any(
-                other != path and other.startswith(f"{path}.")
-                for other in raw_paths
+            and (
+                not any(
+                    other != path and other.startswith(f"{path}.")
+                    for other in raw_paths
+                )
+                or path in array_parents
+                and not any(
+                    is_sensitive_mongo_field(other)
+                    for other in raw_paths
+                    if other != path and other.startswith(f"{path}.")
+                )
             )
         }
         paths.add("_id")

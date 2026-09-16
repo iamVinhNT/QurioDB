@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Desktop app for QurioDB",
   "main": "main.js",
   "author": "QurioDB Team",

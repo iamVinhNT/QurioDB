@@ -64,6 +64,7 @@ class ExecutionService(BaseDatabaseService):
 
         db_type, _ = self.get_db_config(database_id, session)
         if db_type == "mongodb":
+            self.mongo_executor.validate_read_only(sql)
             data, columns = self.mongo_executor.execute(database_id, sql, limit)
         elif db_type == "redis":
             data, columns = self.redis_executor.execute(database_id, sql, limit)

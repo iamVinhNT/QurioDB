@@ -74,6 +74,12 @@ function updateRootReadme(content: string, version: string): string {
     `[Download Linux Package (v${version})](https://github.com/trungvinh2102/QurioDB/releases/download/v${version}/QurioDB_${version}_amd64.deb)`,
   );
 
+  // Match links like - [Download Linux AppImage (v0.1.0)](...QurioDB_0.1.0_amd64.AppImage)
+  updated = updated.replace(
+    /\[Download Linux AppImage \(v[^)]+\)\]\(https:\/\/github\.com\/[^\/]+\/[^\/]+\/releases\/download\/v[^\/]+\/QurioDB_[^_]+_amd64\.AppImage\)/g,
+    `[Download Linux AppImage (v${version})](https://github.com/trungvinh2102/QurioDB/releases/download/v${version}/QurioDB_${version}_amd64.AppImage)`,
+  );
+
   // Match footer "QurioDB - v0.1.0"
   updated = updated.replace(
     /^QurioDB\s*-\s*v.*$/m,

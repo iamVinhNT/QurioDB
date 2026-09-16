@@ -115,6 +115,7 @@ version = "0.1.0"
 - [Download Windows Installer (v${initialVersion})](https://github.com/trungvinh2102/QurioDB/releases/download/v${initialVersion}/QurioDB_${initialVersion}_x64_en-US.msi)
 - [Download Windows Setup (v${initialVersion})](https://github.com/trungvinh2102/QurioDB/releases/download/v${initialVersion}/QurioDB_${initialVersion}_x64-setup.exe)
 - [Download Linux Package (v${initialVersion})](https://github.com/trungvinh2102/QurioDB/releases/download/v${initialVersion}/QurioDB_${initialVersion}_amd64.deb)
+- [Download Linux AppImage (v${initialVersion})](https://github.com/trungvinh2102/QurioDB/releases/download/v${initialVersion}/QurioDB_${initialVersion}_amd64.AppImage)
 
 QurioDB - v${initialVersion}
 `;
@@ -188,6 +189,7 @@ _QurioDB Team - v${initialVersion}_
     expect(rootReadme).toContain("QurioDB_1.2.3_x64_en-US.msi");
     expect(rootReadme).toContain("QurioDB_1.2.3_x64-setup.exe");
     expect(rootReadme).toContain("QurioDB_1.2.3_amd64.deb");
+    expect(rootReadme).toContain("QurioDB_1.2.3_amd64.AppImage");
     expect(rootReadme).toContain("QurioDB - v1.2.3");
 
     const desktopReadme = fs.readFileSync(
@@ -276,7 +278,7 @@ describe("CLI Boundary and Subprocess Execution", () => {
     );
     fs.writeFileSync(
       path.join(tempDir, "README.md"),
-      "- [Download Windows Installer (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_x64_en-US.msi)\n- [Download Windows Setup (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_x64-setup.exe)\n- [Download Linux Package (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_amd64.deb)\nQurioDB - v0.1.0\n",
+      "- [Download Windows Installer (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_x64_en-US.msi)\n- [Download Windows Setup (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_x64-setup.exe)\n- [Download Linux Package (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_amd64.deb)\n- [Download Linux AppImage (v0.1.0)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.0/QurioDB_0.1.0_amd64.AppImage)\nQurioDB - v0.1.0\n",
     );
     fs.writeFileSync(path.join(tempDir, "apps/desktop/README.md"), "_QurioDB Team - v0.1.0_\n");
 
@@ -327,5 +329,90 @@ describe("Root package.json desktop scripts validation", () => {
       expect(scripts[cmd]).toBeDefined();
       expect(scripts[cmd].startsWith("bun run version:sync &&")).toBe(true);
     }
+  });
+});
+
+describe("Desktop release workflow", () => {
+  const workflowPath = path.join(process.cwd(), ".github/workflows/release-desktop.yml");
+
+  it("builds both native bundles and releases only after both builds pass", () => {
+    expect(fs.existsSync(workflowPath)).toBe(true);
+    const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+    expect(workflow).toMatch(/on:\s*\n\s+push:\s*\n\s+tags:\s*\n\s+- v\*\.\*\.\*/);
+    expect(workflow).toMatch(/release:[\s\S]*permissions:\s*\n\s+contents: write/);
+    expect(workflow).toContain("runs-on: windows-latest");
+    expect(workflow).toContain("runs-on: ubuntu-22.04");
+    expect(workflow).toContain("build-backend.ps1 -Target msvc");
+    expect(workflow).toContain("api-x86_64-pc-windows-msvc.exe");
+    expect(workflow).toContain("api-x86_64-unknown-linux-gnu");
+    const sidecarBuildIndex = workflow.indexOf("build-backend.ps1 -Target msvc");
+    const sidecarCheckIndex = workflow.indexOf("Expected Windows MSVC sidecar was not produced");
+    const tauriBuildIndex = workflow.indexOf("bun run tauri build --target x86_64-pc-windows-msvc");
+    expect(sidecarBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(sidecarCheckIndex).toBeGreaterThan(sidecarBuildIndex);
+    expect(tauriBuildIndex).toBeGreaterThan(sidecarCheckIndex);
+    expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_x64_en-US\.msi/);
+    expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_x64-setup\.exe/);
+    expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_amd64\.deb/);
+    expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_amd64\.AppImage/);
+    expect(workflow).toContain("needs: [build-windows, build-linux]");
+    expect(workflow).toContain('gh release create "$GITHUB_REF_NAME"');
+    expect(workflow).toContain('gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"');
+    expect(workflow).toContain("Release already exists; refusing to modify or overwrite");
+    expect(workflow).toContain('git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$GITHUB_REF_NAME"');
+    expect(workflow).toContain('remote_sha="$(git ls-remote');
+    expect(workflow).toContain('remote_sha" != "$GITHUB_SHA"');
+    expect(workflow).toContain('--verify-tag');
+    expect(workflow).toContain('title "release-v$VERSION"');
+  });
+
+  it("supports safe manual preflight and cleans up frozen sidecars before packaging", () => {
+    const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toMatch(/workflow_dispatch:[\s\S]*version:[\s\S]*required:\s*true/);
+    expect(workflow).toContain("id: version");
+    expect(workflow).not.toContain("apps/api/.env");
+    expect(workflow).toContain("if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')");
+
+    const windowsSmokeIndex = workflow.indexOf("Smoke-test Windows FastAPI sidecar");
+    const windowsTauriIndex = workflow.indexOf("bun run tauri build --target x86_64-pc-windows-msvc");
+    const linuxSmokeIndex = workflow.indexOf("Smoke-test Linux FastAPI sidecar");
+    const linuxTauriIndex = workflow.indexOf("bun run tauri build --target x86_64-unknown-linux-gnu");
+
+    expect(windowsSmokeIndex).toBeGreaterThanOrEqual(0);
+    expect(windowsSmokeIndex).toBeLessThan(windowsTauriIndex);
+    expect(workflow.slice(windowsSmokeIndex, windowsTauriIndex)).toContain("/health");
+    expect(workflow.slice(windowsSmokeIndex, windowsTauriIndex)).toContain("taskkill");
+    expect(linuxSmokeIndex).toBeGreaterThanOrEqual(0);
+    expect(linuxSmokeIndex).toBeLessThan(linuxTauriIndex);
+    expect(workflow.slice(linuxSmokeIndex, linuxTauriIndex)).toContain("/health");
+    expect(workflow.slice(linuxSmokeIndex, linuxTauriIndex)).toContain("trap cleanup EXIT");
+  });
+
+  it("requires exact stable versions for tag releases and manual preflight", () => {
+    const workflow = fs.readFileSync(workflowPath, "utf-8");
+    const stableTag = /^v\d+\.\d+\.\d+$/;
+    const stableInput = /^\d+\.\d+\.\d+$/;
+
+    expect(stableTag.test("v0.1.3")).toBe(true);
+    expect(stableTag.test("v0.1.3-rc.1")).toBe(false);
+    expect(stableInput.test("0.1.3")).toBe(true);
+    expect(stableInput.test("0.1.3-rc.1")).toBe(false);
+    expect(workflow).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(workflow).toContain("^[0-9]+\\.[0-9]+\\.[0-9]+$");
+  });
+});
+
+describe("Windows sidecar build script", () => {
+  it("anchors the destination to the repository and restores the caller location", () => {
+    const script = fs.readFileSync(path.join(process.cwd(), "build-backend.ps1"), "utf-8");
+
+    expect(script).toContain("$REPO_ROOT = (Resolve-Path -LiteralPath $PSScriptRoot).Path");
+    expect(script).toContain('$DEST_DIR = Join-Path $REPO_ROOT "apps/desktop/src-tauri/bin"');
+    expect(script).toContain("Push-Location -LiteralPath $API_DIR");
+    expect(script).toContain("Pop-Location");
+    expect(script).not.toContain('"../../$DEST_DIR"');
   });
 });
