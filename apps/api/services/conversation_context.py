@@ -14,6 +14,7 @@ import logging
 from typing import List, Dict, Optional, Any
 
 from models import AIChatMessage, SessionLocal
+from services.ai.mongodb_query import redact_mongo_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ class ConversationContextManager:
         self,
         conversation_id: Optional[str],
         current_prompt: str,
+        redact_sensitive: bool = False,
     ) -> str:
         """
         Builds a compact text block of conversation context for injection
@@ -121,7 +123,7 @@ class ConversationContextManager:
         if not conversation_id:
             return ""
 
-        raw_history = self._load_history(conversation_id)
+        raw_history = self._load_history(conversation_id, redact_sensitive=redact_sensitive)
         if not raw_history:
             return ""
 
@@ -154,7 +156,8 @@ class ConversationContextManager:
 
     def _load_history(
         self,
-        conversation_id: str
+        conversation_id: str,
+        redact_sensitive: bool = False,
     ) -> List[Dict[str, str]]:
         """Load conversation messages from database, ordered chronologically."""
         session = SessionLocal()
@@ -168,7 +171,12 @@ class ConversationContextManager:
             )
 
             return [
-                {"role": m.role, "content": m.content or ""}
+                {
+                    "role": m.role,
+                    "content": redact_mongo_sensitive_text(m.content or "")
+                    if redact_sensitive
+                    else m.content or "",
+                }
                 for m in messages
             ]
         except Exception as e:

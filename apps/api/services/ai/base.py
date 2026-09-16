@@ -15,10 +15,17 @@ from models import AIChatMessage, AIConversation, AIGeneratedQuery, RagRetrieval
 from ..conversation_context import ConversationContextManager
 from routes.ai_config import decrypt_key
 from .langchain_runtime import get_ai_api_key, langchain_runtime
+from .mongodb_query import redact_mongo_sensitive_payload, redact_mongo_sensitive_text
 from .task_model_router import task_model_router
 from ..prompts import VIETNAMESE_RESPONSE_POLICY
 
 logger = logging.getLogger(__name__)
+
+MONGODB_RESPONSE_POLICY = """### LANGUAGE POLICY
+- Vietnamese is QurioDB's default assistant language.
+- Write user-visible text in Vietnamese with diacritics by default.
+- Keep MongoDB code, identifiers, keywords, citation ids, provider names, and tool names in their required original form.
+"""
 
 def _get_system_api_key() -> Optional[str]:
     """Fetches the Google/Gemini API key from encrypted DB settings."""
@@ -54,15 +61,21 @@ class BaseAIService:
         user_id: Optional[str] = None,
         task_key: Optional[str] = None,
         db_id: Optional[str] = None,
+        database_type: Optional[str] = None,
     ) -> str:
         """Internal helper to communicate with every supported provider through LangChain."""
         model_id = task_model_router.resolve_model_id(task_key, user_id, model_id, db_id)
         provider = langchain_runtime.resolve_provider(model_id=model_id, user_id=user_id)
+        is_mongodb = (database_type or "").lower() == "mongodb"
+        assistant_scope = "MongoDB-focused" if is_mongodb else "SQL-focused"
+        assistant_policy = MONGODB_RESPONSE_POLICY if is_mongodb else VIETNAMESE_RESPONSE_POLICY
+        if is_mongodb:
+            combined_prompt = redact_mongo_sensitive_text(combined_prompt)
         try:
             return langchain_runtime.invoke_text(
                 system_prompt=(
-                    "You are QurioDB's SQL-focused AI assistant.\n"
-                    f"{VIETNAMESE_RESPONSE_POLICY}"
+                    f"You are QurioDB's {assistant_scope} AI assistant.\n"
+                    f"{assistant_policy}"
                 ),
                 prompt=combined_prompt,
                 model_id=model_id,
@@ -73,7 +86,15 @@ class BaseAIService:
             logger.warning("LangChain generation failed for provider %s: %s", provider, e)
         return f"AI Error: LangChain generation failed for provider {provider}. Configure its API key and model settings."
 
-    def _save_chat(self, role: str, content: str, user_id: Optional[str] = None, db_id: Optional[str] = None, conv_id: Optional[str] = None) -> Optional[str]:
+    def _save_chat(
+        self,
+        role: str,
+        content: str,
+        user_id: Optional[str] = None,
+        db_id: Optional[str] = None,
+        conv_id: Optional[str] = None,
+        database_type: Optional[str] = None,
+    ) -> Optional[str]:
         """Persists AI chat messages to the database."""
         session = SessionLocal()
         try:
@@ -81,7 +102,11 @@ class BaseAIService:
             msg = AIChatMessage(
                 id=msg_id,
                 role=role,
-                content=str(content),
+                content=(
+                    redact_mongo_sensitive_text(content)
+                    if (database_type or "").lower() == "mongodb"
+                    else str(content)
+                ),
                 userId=user_id,
                 databaseId=db_id,
                 conversationId=conv_id
@@ -102,15 +127,30 @@ class BaseAIService:
                 session.close()
 
 
-    def _save_generated_query(self, sql: str, prompt: Optional[str], explanation: Optional[str], user_id: Optional[str] = None, db_id: Optional[str] = None):
+    def _save_generated_query(
+        self,
+        sql: str,
+        prompt: Optional[str],
+        explanation: Optional[str],
+        user_id: Optional[str] = None,
+        db_id: Optional[str] = None,
+        database_type: Optional[str] = None,
+    ):
         """Persists AI generated SQL queries to the database."""
         session = SessionLocal()
         try:
+            is_mongodb = (database_type or "").lower() == "mongodb"
             query = AIGeneratedQuery(
                 id=str(uuid.uuid4()),
-                prompt=str(prompt)[:2000] if prompt else None,
-                sql=str(sql),
-                explanation=str(explanation)[:5000] if explanation else None,
+                prompt=(redact_mongo_sensitive_text(prompt) if is_mongodb else str(prompt))[:2000]
+                if prompt
+                else None,
+                sql=redact_mongo_sensitive_text(sql) if is_mongodb else str(sql),
+                explanation=(
+                    redact_mongo_sensitive_text(explanation) if is_mongodb else str(explanation)
+                )[:5000]
+                if explanation
+                else None,
                 userId=user_id,
                 databaseId=db_id
             )
@@ -135,6 +175,9 @@ class BaseAIService:
         """Persists safe RAG telemetry without storing full user text."""
         if not trace:
             return
+        safe_trace = redact_mongo_sensitive_payload(trace)
+        if not isinstance(safe_trace, dict):
+            return
 
         session = SessionLocal()
         try:
@@ -142,13 +185,13 @@ class BaseAIService:
                 id=str(uuid.uuid4()),
                 conversationId=conv_id,
                 messageId=message_id,
-                databaseId=db_id or trace.get("databaseId"),
+                databaseId=db_id or safe_trace.get("databaseId"),
                 queryTextHash=hashlib.sha256(str(query_text or "").encode("utf-8")).hexdigest(),
-                retrievalMode=trace.get("retrievalMode") or "unknown",
-                candidateCount=int(trace.get("candidateCount") or trace.get("candidateBudget") or 0),
-                selectedCount=int(trace.get("selectedCount") or len(trace.get("tables") or [])),
-                latencyMs=int(trace.get("latencyMs") or latency_ms or 0),
-                trace=trace,
+                retrievalMode=safe_trace.get("retrievalMode") or "unknown",
+                candidateCount=int(safe_trace.get("candidateCount") or safe_trace.get("candidateBudget") or 0),
+                selectedCount=int(safe_trace.get("selectedCount") or len(safe_trace.get("tables") or [])),
+                latencyMs=int(safe_trace.get("latencyMs") or latency_ms or 0),
+                trace=safe_trace,
             ))
             session.commit()
         except Exception as e:

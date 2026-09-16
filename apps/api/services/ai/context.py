@@ -16,8 +16,40 @@ from ..metadata import metadata_service
 from ..base_service import BaseDatabaseService
 from ..schema_retriever import TableRetrievalResult, schema_retriever
 from .retrieval.text import format_table_reference
+from .mongodb_query import (
+    build_mongodb_array_field_allowlist,
+    build_mongodb_field_allowlist,
+    is_sensitive_mongo_field,
+    normalize_mongo_field_path,
+)
 
 logger = logging.getLogger(__name__)
+
+DATABASE_TYPE_ALIASES = {
+    "postgresql": "postgres",
+    "postgres": "postgres",
+    "mariadb": "mysql",
+    "sqlserver": "mssql",
+}
+SUPPORTED_DATABASE_TYPES = frozenset(
+    {
+        "clickhouse",
+        "duckdb",
+        "mssql",
+        "mongodb",
+        "mysql",
+        "oracle",
+        "postgres",
+        "redis",
+        "sqlite",
+    }
+)
+
+
+def normalize_database_type(database_type: Optional[str]) -> str:
+    """Normalize connector aliases while preserving unknown values for rejection."""
+    normalized = str(database_type or "").strip().lower()
+    return DATABASE_TYPE_ALIASES.get(normalized, normalized)
 
 
 @dataclass(frozen=True)
@@ -27,6 +59,11 @@ class SchemaContextResult:
     context: str
     retrieval_trace: Dict[str, Any]
     citations: List[Dict[str, Any]]
+    collections: tuple[str, ...] = ()
+    field_allowlist: Optional[Dict[str, tuple[str, ...]]] = None
+    array_field_allowlist: Optional[Dict[str, tuple[str, ...]]] = None
+    database: Optional[str] = None
+    accessible_databases: tuple[str, ...] = ()
 
 
 class SchemaContextService:
@@ -36,13 +73,35 @@ class SchemaContextService:
         self._schema_cache = {} # db_id:schema -> {timestamp, context}
         self._cache_ttl_minutes = 10
 
-    def format_schema_context(self, db_id: str, schema: str, intent: Optional[str] = None) -> str:
+    def format_schema_context(
+        self,
+        db_id: str,
+        schema: str,
+        intent: Optional[str] = None,
+        database_type: Optional[str] = None,
+    ) -> str:
         """Returns schema context text for existing callers."""
-        return self.build_schema_context(db_id, schema, intent=intent).context
+        return self.build_schema_context(
+            db_id,
+            schema,
+            intent=intent,
+            database_type=database_type,
+        ).context
 
-    def build_schema_context(self, db_id: str, schema: str, intent: Optional[str] = None) -> SchemaContextResult:
+    def build_schema_context(
+        self,
+        db_id: str,
+        schema: str,
+        intent: Optional[str] = None,
+        database_type: Optional[str] = None,
+    ) -> SchemaContextResult:
         """Constructs a rich, dialect-aware schema context with RAG-based selection."""
         schema = schema or "public"
+        db_type = normalize_database_type(database_type) if database_type is not None else self._get_db_type(db_id)
+        if db_type not in SUPPORTED_DATABASE_TYPES:
+            raise ValueError("Unable to determine database type for schema context.")
+        if db_type.lower() == "mongodb":
+            return self._build_mongodb_schema_context(db_id, schema, intent)
 
         # Use semantic retrieval if intent is provided
         relevant_tables = []
@@ -87,7 +146,6 @@ class SchemaContextService:
             target_cols = all_cols
 
         # 3. Fetch dialect and build DDL with samples
-        db_type = self._get_db_type(db_id)
         all_fks = metadata_service.get_all_foreign_keys(db_id, schema)
         
         context = [f"DATABASE DIALECT: {db_type.upper()}"]
@@ -130,6 +188,120 @@ class SchemaContextService:
             retrieval_trace=self._build_retrieval_trace(db_id, intent, schema, retrieval_results),
             citations=self._build_citations(db_id, retrieval_results),
         )
+
+    def _build_mongodb_schema_context(
+        self,
+        db_id: str,
+        schema: str,
+        intent: Optional[str],
+    ) -> SchemaContextResult:
+        """Build bounded collection and nested-field context without SQL DDL."""
+        database, accessible_databases = self._resolve_mongodb_database(db_id, schema)
+        all_cols = metadata_service.get_all_columns(db_id, database)
+        if not all_cols:
+            return SchemaContextResult(
+                context="DATABASE DIALECT: MONGODB\nNo collection metadata available.",
+                retrieval_trace=self._build_retrieval_trace(db_id, intent, schema, []),
+                citations=[],
+                database=database,
+                accessible_databases=accessible_databases,
+            )
+
+        context = [
+            "DATABASE DIALECT: MONGODB",
+            f"DATABASE: {database}",
+            "IDENTIFIER CONTRACT:",
+            "- Use collection and field identifiers exactly as listed.",
+            "- Do not invent collections or field paths.",
+            "- Use MongoDB dot notation for nested fields, for example items.sku.",
+        ]
+        collections = []
+        field_allowlist = build_mongodb_field_allowlist(all_cols)
+        array_field_allowlist = build_mongodb_array_field_allowlist(all_cols)
+        for collection_name, columns in list(all_cols.items())[:30]:
+            if not columns:
+                continue
+            collections.append(str(collection_name))
+            context.append(f"COLLECTION: {collection_name}")
+            context.append("FIELDS:")
+            for column in columns[:200]:
+                raw_name = column.get("name")
+                if not isinstance(raw_name, str):
+                    continue
+                field_name = normalize_mongo_field_path(raw_name)
+                if not field_name or "[]" in field_name or is_sensitive_mongo_field(field_name):
+                    continue
+                array_marker = " (array element)" if column.get("isArray") else ""
+                context.append(f"- {field_name}: {column.get('type', 'unknown')}{array_marker}")
+
+            indexes = self._get_mongodb_indexes(db_id, database, str(collection_name))
+            if indexes:
+                context.append("INDEXES:")
+                context.extend(f"- {index}" for index in indexes[:30])
+
+        return SchemaContextResult(
+            context="\n".join(context),
+            retrieval_trace=self._build_retrieval_trace(db_id, intent, schema, []),
+            citations=[],
+            collections=tuple(collections),
+            field_allowlist={
+                collection: tuple(path for path in paths if collection in collections)
+                for collection, paths in field_allowlist.items()
+                if collection in collections
+            },
+            array_field_allowlist={
+                collection: tuple(path for path in paths if collection in collections)
+                for collection, paths in array_field_allowlist.items()
+                if collection in collections
+            },
+            database=database,
+            accessible_databases=accessible_databases,
+        )
+
+    def _get_mongodb_database(self, db_id: str, schema: str) -> Optional[str]:
+        """Resolve the trusted Mongo database without issuing schema SQL."""
+        try:
+            database, _ = self._resolve_mongodb_database(db_id, schema)
+            return database
+        except Exception as exc:
+            logger.warning("MongoDB database metadata unavailable for %s: %s", db_id, exc)
+            return None
+
+    def _resolve_mongodb_database(self, db_id: str, schema: str) -> tuple[str, tuple[str, ...]]:
+        """Select one configured or requested database from server-reported names."""
+        accessible_databases = tuple(
+            sorted({str(database).strip() for database in metadata_service.get_schemas(db_id) if str(database).strip()})
+        )
+        if not accessible_databases:
+            raise ValueError("MongoDB accessible database metadata is unavailable.")
+
+        if schema and schema.strip().lower() != "public":
+            requested_database = schema.strip()
+        else:
+            requested_database = ""
+        if not requested_database:
+            session = SessionLocal()
+            try:
+                _, config = BaseDatabaseService().get_db_config(db_id, session)
+                database = config.get("database") if isinstance(config, dict) else None
+                requested_database = str(database).strip() if database else ""
+            except Exception as exc:
+                raise ValueError("MongoDB configured database metadata is unavailable.") from exc
+            finally:
+                session.close()
+
+        if not requested_database or requested_database not in accessible_databases:
+            raise ValueError("Requested MongoDB database is not reported as accessible.")
+        return requested_database, accessible_databases
+
+    def _get_mongodb_indexes(self, db_id: str, schema: str, collection: str) -> List[str]:
+        """Read index names defensively for MongoDB prompt grounding."""
+        try:
+            indexes = metadata_service.get_indexes(db_id, schema, collection)
+            return [str(index.get("indexname") or index.get("name")) for index in indexes]
+        except Exception as exc:
+            logger.debug("MongoDB index context unavailable for %s: %s", collection, exc)
+            return []
 
     def _format_identifier_contract(self, table_names, schema: str, db_type: str) -> List[str]:
         lines = [
@@ -222,11 +394,13 @@ class SchemaContextService:
         return filtered
 
     def _get_db_type(self, db_id: str) -> str:
-        """Retrieves db type (dialect) safely."""
+        """Retrieve and normalize database type without unsafe SQL fallback."""
         session = SessionLocal()
         try:
-            return BaseDatabaseService().get_db_config(db_id, session)[0]
-        except Exception: return "SQL"
+            db_type = normalize_database_type(BaseDatabaseService().get_db_config(db_id, session)[0])
+            if db_type not in SUPPORTED_DATABASE_TYPES:
+                raise ValueError("Unable to determine database type for schema context.")
+            return db_type
         finally:
             if session:
                 session.close()

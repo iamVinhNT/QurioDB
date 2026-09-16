@@ -17,6 +17,7 @@ from schemas.ai import (
     ValidateSqlRequest,
 )
 from services.ai.conversation_store import conversation_store
+from services.ai.mongodb_query import redact_mongo_sensitive_text
 from services.ai.retrieval.metadata_source import SchemaMetadataSource
 from services.ai.sql_safety import sql_safety_validator
 from services.ai_service import ai_service
@@ -115,10 +116,11 @@ def validate_sql(data: ValidateSqlRequest, current_user: dict = Depends(get_curr
 @router.post("/agent")
 def execute_agent(data: ExecuteAgentRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("userId")
+    title_prompt = redact_mongo_sensitive_text(data.prompt)
     conversation_id = conversation_store.ensure_conversation(
         user_id,
         data.databaseId,
-        data.prompt,
+        title_prompt,
         data.conversationId,
     )
     result = ai_service.execute_agent(
@@ -132,7 +134,12 @@ def execute_agent(data: ExecuteAgentRequest, current_user: dict = Depends(get_cu
     if isinstance(result, dict):
         result["conversationId"] = conversation_id
     if result.get("type") == "error":
-        raise HTTPException(status_code=400, detail=result.get("message", "Unknown error"))
+        detail = {"message": result.get("message") or "Unknown error"}
+        if result.get("queryLanguage") == "mongodb":
+            for key in ("queryLanguage", "retryCount", "maxRetries", "lastQueryText", "last_sql"):
+                if key in result:
+                    detail[key] = result[key]
+        raise HTTPException(status_code=400, detail=detail)
     return result
 
 

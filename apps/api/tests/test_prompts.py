@@ -6,6 +6,7 @@ Regression tests for QurioDB AI system prompt templates.
 
 from services.prompts import (
     get_agent_prompt,
+    get_mongodb_agent_prompt,
     get_general_chat_prompt,
     get_sql_fix_prompt,
     get_sql_explanation_prompt,
@@ -90,3 +91,20 @@ def test_ai_prompts_default_user_visible_text_to_vietnamese():
     for prompt in prompts:
         assert "Vietnamese is QurioDB's default assistant language" in prompt
         assert "Vietnamese with diacritics" in prompt
+
+
+def test_mongodb_agent_prompt_requires_read_only_json_mql_contract():
+    prompt = get_mongodb_agent_prompt(
+        "DATABASE DIALECT: MONGODB\nCOLLECTION: orders\nFIELDS:\n- status: str"
+    )
+
+    assert "strict JSON only" in prompt
+    assert '"operation"' in prompt
+    assert '"collection"' in prompt
+    assert '"filter"' in prompt
+    assert "findOne" in prompt
+    assert "countDocuments" in prompt
+    assert "distinct" in prompt
+    assert "$out" in prompt
+    assert "$function" in prompt
+    assert "SQL" not in prompt

@@ -96,3 +96,20 @@ def test_disabled_assignment_uses_fallback_model(monkeypatch):
 
     assert resolved.model_id == "gemini-2.5-flash"
     assert resolved.source == "fallback"
+
+
+def test_mongodb_agent_falls_back_to_sql_agent_assignment_without_migration(monkeypatch):
+    _install_memory_db(monkeypatch)
+    router = TaskModelRouter()
+
+    router.upsert_assignments("user-1", [{
+        "taskKey": "agent.sql_readonly",
+        "modelId": "gpt-5.4",
+        "fallbackModelId": "gemini-2.5-flash",
+        "enabled": True,
+    }])
+
+    resolved = router.resolve_model("agent.mongodb_readonly", "user-1")
+
+    assert resolved.model_id == "gpt-5.4"
+    assert resolved.source == "fallback_task"

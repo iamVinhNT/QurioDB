@@ -71,6 +71,13 @@ TASK_CATALOG: List[Dict[str, Any]] = [
         "recommendedCapabilities": ["supportsStructuredOutput", "supportsReasoning"],
     },
     {
+        "key": "agent.mongodb_readonly",
+        "name": "Read-only MongoDB agent",
+        "description": "Plan, generate, validate, repair, and execute safe read-only MongoDB JSON query specs.",
+        "requiredCapabilities": ["supportsJsonMode"],
+        "recommendedCapabilities": ["supportsStructuredOutput", "supportsReasoning"],
+    },
+    {
         "key": "router.triage",
         "name": "Task triage",
         "description": "Classify AI requests before specialized execution.",
@@ -174,13 +181,17 @@ class TaskModelRouter:
             return ResolvedTaskModel(model_id=None, source="default")
 
         assignment = self._find_assignment(task_key, user_id, database_id)
+        fallback_task = False
+        if not assignment and task_key == "agent.mongodb_readonly":
+            assignment = self._find_assignment("agent.sql_readonly", user_id, database_id)
+            fallback_task = assignment is not None
         if not assignment:
             return ResolvedTaskModel(model_id=None, source="default")
 
         if assignment.enabled and assignment.modelId:
             return ResolvedTaskModel(
                 model_id=assignment.modelId,
-                source="task_assignment",
+                source="fallback_task" if fallback_task else "task_assignment",
                 fallback_model_id=assignment.fallbackModelId,
             )
         if assignment.fallbackModelId:
