@@ -128,6 +128,12 @@ class TestTargetProbe:
         assert hasattr(health_service, "PROBE_TIMEOUT_SECONDS")
         assert health_service.PROBE_TIMEOUT_SECONDS <= 2
 
+    def test_real_sqlite_probe_succeeds_without_spawn(self, health_service, sample_db_config):
+        """In-memory SQLite uses bounded direct execution because spawn adds no isolation value."""
+        with patch("services.database_health_service._mp_context.Process") as process:
+            assert health_service._probe_target(sample_db_config) is True
+        process.assert_not_called()
+
     def test_real_sqlite_probe_succeeds(self, health_service, sample_db_config):
         """Real SQLite :memory: database probe executes SELECT 1 successfully."""
         reachable = health_service._probe_target(sample_db_config)

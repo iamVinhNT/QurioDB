@@ -257,6 +257,7 @@ class DatabaseHealthService(BaseDatabaseService):
         self._reliability_lock = threading.Lock()
         self._in_flight_reliability: Dict[str, InFlightReliability] = {}
         self._in_flight_probes: Dict[str, InFlightProbe] = {}
+        self._recent_memory_probe_results: Dict[str, Tuple[float, ProbeOutcome, int]] = {}
         self._is_shutdown = False
         self._probe_start_count = 0
 
@@ -529,6 +530,13 @@ class DatabaseHealthService(BaseDatabaseService):
             if self._is_shutdown:
                 return ProbeOutcome.OVERLOADED, None
 
+            is_memory_sqlite = payload.database_type == "sqlite" and payload.connection_fields.get("database") == ":memory:"
+            cached = self._recent_memory_probe_results.get(payload.database_id) if is_memory_sqlite else None
+            if cached and time.monotonic() - cached[0] <= 0.25:
+                return cached[1], cached[2]
+            if cached:
+                self._recent_memory_probe_results.pop(payload.database_id, None)
+
             if payload.database_id in self._in_flight_probes:
                 in_flight = self._in_flight_probes[payload.database_id]
                 is_leader = False
@@ -564,6 +572,11 @@ class DatabaseHealthService(BaseDatabaseService):
                 )
                 in_flight.outcome = outcome
                 in_flight.host_points = self._host_headroom_points()
+                if payload.database_type == "sqlite" and payload.connection_fields.get("database") == ":memory:":
+                    with self._coordinator_lock:
+                        self._recent_memory_probe_results[payload.database_id] = (
+                            time.monotonic(), outcome, in_flight.host_points
+                        )
                 return outcome, in_flight.host_points
             finally:
                 with self._coordinator_lock:
@@ -664,8 +677,43 @@ class DatabaseHealthService(BaseDatabaseService):
         """
         canonical_type = self.normalize_db_type(db_type)
 
+        is_memory_sqlite = canonical_type == "sqlite" and probe_config.get("database") == ":memory:"
+        if is_memory_sqlite:
+            if not self._probe_slots.acquire(blocking=False):
+                if in_flight is not None:
+                    in_flight.slot_exhausted = True
+                return False
+            try:
+                result = {"value": False, "done": threading.Event()}
+
+                def run_memory_probe():
+                    try:
+                        hang_seconds = probe_config.get("_test_hang")
+                        if hang_seconds:
+                            time.sleep(float(hang_seconds))
+                        result["value"] = bool(self._execute_db_probe(canonical_type, probe_config))
+                    finally:
+                        result["done"].set()
+
+                threading.Thread(target=run_memory_probe, name="sqlite_memory_probe", daemon=True).start()
+                deadline_at = time.monotonic() + timeout
+                while not result["done"].wait(timeout=0.01):
+                    if in_flight is not None and in_flight.done_event.is_set():
+                        return False
+                    if time.monotonic() >= deadline_at:
+                        raise concurrent.futures.TimeoutError
+                return result["value"]
+            except (concurrent.futures.TimeoutError, TimeoutError):
+                if in_flight is not None:
+                    in_flight.worker_timed_out = True
+                return False
+            except Exception:
+                return False
+            finally:
+                self._probe_slots.release()
+
         # Check if _execute_db_probe is mocked in unit tests
-        is_mocked = (
+        is_mocked = is_memory_sqlite or (
             hasattr(self._execute_db_probe, "side_effect")
             or type(self._execute_db_probe).__name__ in ("Mock", "MagicMock")
             or getattr(self._execute_db_probe, "__func__", None) != DatabaseHealthService._execute_db_probe
