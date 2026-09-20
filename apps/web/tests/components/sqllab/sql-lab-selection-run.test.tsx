@@ -27,9 +27,11 @@ const { executeMock, editorInstances } = vi.hoisted(() => ({
 
 vi.mock("@/lib/api-client", () => ({
   databaseApi: {
-    list: vi.fn(async () => ({
-      data: [{ id: "db-1", type: "postgresql", databaseName: "pg-local" }],
-    })),
+     list: vi.fn(async () => ({
+       data: [{ id: "db-1", type: "postgresql", databaseName: "pg-local" }],
+     })),
+     test: vi.fn(async () => ({ data: { success: true } })),
+
     getSchemas: vi.fn(async () => ["public"]),
     getTables: vi.fn(async () => []),
     getViews: vi.fn(async () => []),

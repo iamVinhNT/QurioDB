@@ -5,6 +5,7 @@ Integration tests for the dashboard stats route, verifying response compatibilit
 and resilient health reporting during target database outages.
 """
 
+import concurrent.futures
 import socket
 import threading
 import time
@@ -208,6 +209,37 @@ def test_dashboard_stats_deadline_with_slow_analytics_and_reliability(client, mo
     assert isinstance(data["performance"], list)
     assert "status_counts" in data
     assert isinstance(data["status_counts"], list)
+
+
+def test_dashboard_analytics_timeout_caps_background_workers():
+    """Timed-out analytics calls must not create an unbounded worker backlog."""
+    from services.dashboard_service import DashboardService
+
+    service = DashboardService()
+    started = 0
+    started_lock = threading.Lock()
+    release = threading.Event()
+
+    def _blocked_analytics():
+        nonlocal started
+        with started_lock:
+            started += 1
+        release.wait(timeout=2.0)
+        return [], []
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [
+                executor.submit(service._fetch_analytics_with_timeout, _blocked_analytics, 0.01)
+                for _ in range(8)
+            ]
+            for future in futures:
+                with pytest.raises(TimeoutError):
+                    future.result()
+
+        assert started <= service.MAX_ANALYTICS_WORKERS
+    finally:
+        release.set()
 
 
 def test_dashboard_stats_exhausted_budget_returns_compatible_fallback_not_error(client, mock_session):

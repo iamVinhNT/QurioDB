@@ -14,7 +14,7 @@ import multiprocessing as mp
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import psutil
 from sqlalchemy import create_engine, pool, text, event
@@ -44,6 +44,14 @@ class ProbePayload:
     connection_fields: Dict[str, Any]
 
 
+class InFlightReliability:
+    """Represents one coalesced reliability calculation for a database."""
+
+    def __init__(self):
+        self.done_event = threading.Event()
+        self.points: Optional[int] = None
+
+
 class InFlightProbe:
     """Represents a single in-flight probe coordinated across concurrent requests."""
     def __init__(self, db_id: str, payload: ProbePayload):
@@ -51,6 +59,10 @@ class InFlightProbe:
         self.payload = payload
         self.done_event = threading.Event()
         self.outcome: Optional[ProbeOutcome] = None
+        self.host_points: Optional[int] = None
+        self.slot_exhausted = False
+        self.worker_timed_out = False
+        self.worker_start_timed_out = False
         self.process: Optional[Any] = None
         self.parent_conn: Optional[Any] = None
         self.child_conn: Optional[Any] = None
@@ -92,6 +104,10 @@ def _spawn_probe_worker(payload: ProbePayload, child_conn: Any) -> None:
     Guarantees no credentials or raw driver error strings leak.
     """
     try:
+        startup_hang_sec = payload.connection_fields.get("_test_startup_hang")
+        if startup_hang_sec:
+            time.sleep(float(startup_hang_sec))
+        child_conn.send(("started",))
         # Check for test hang injection
         hang_sec = payload.connection_fields.get("_test_hang")
         if hang_sec:
@@ -100,14 +116,14 @@ def _spawn_probe_worker(payload: ProbePayload, child_conn: Any) -> None:
         # Check for test fail injection
         fail_msg = payload.connection_fields.get("_test_fail")
         if fail_msg:
-            child_conn.send((False, False))
+            child_conn.send(("result", False, False))
             return
 
         res = _execute_db_probe_isolated(payload.database_type, payload.connection_fields)
-        child_conn.send((True, res))
+        child_conn.send(("result", True, res))
     except Exception:
         try:
-            child_conn.send((False, False))
+            child_conn.send(("result", False, False))
         except Exception:
             pass
     finally:
@@ -225,19 +241,24 @@ class DatabaseHealthService(BaseDatabaseService):
     """
 
     PROBE_TIMEOUT_SECONDS = 1.5
-    _MAX_CONCURRENT_PROBES = 8
-    _probe_semaphore = threading.BoundedSemaphore(_MAX_CONCURRENT_PROBES)
+    MAX_RELIABILITY_WORKERS = 4
+    MAX_CONCURRENT_PROBE_PROCESSES = 4
 
     def __init__(self, max_concurrent_probes: int = 8):
         super().__init__()
-        self._max_concurrent_probes = max_concurrent_probes
+        self._max_concurrent_probes = min(
+            max_concurrent_probes, self.MAX_CONCURRENT_PROBE_PROCESSES
+        )
+        self._probe_slots = threading.BoundedSemaphore(
+            min(max_concurrent_probes, self.MAX_CONCURRENT_PROBE_PROCESSES)
+        )
+        self._reliability_slots = threading.BoundedSemaphore(self.MAX_RELIABILITY_WORKERS)
         self._coordinator_lock = threading.Lock()
+        self._reliability_lock = threading.Lock()
+        self._in_flight_reliability: Dict[str, InFlightReliability] = {}
         self._in_flight_probes: Dict[str, InFlightProbe] = {}
         self._is_shutdown = False
         self._probe_start_count = 0
-        self._reliability_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="health_reliability"
-        )
 
     @staticmethod
     def normalize_db_type(db_type: str) -> str:
@@ -410,11 +431,12 @@ class DatabaseHealthService(BaseDatabaseService):
         )
 
         payload = self.build_probe_payload(db_config)
+        host_points_override = None
         if is_probe_target_mocked:
             reachable = bool(self._probe_target(db_config, timeout=self.PROBE_TIMEOUT_SECONDS))
             outcome = ProbeOutcome.REACHABLE if reachable else ProbeOutcome.UNREACHABLE
         else:
-            outcome = self._coordinate_probe(payload, deadline)
+            outcome, host_points_override = self._coordinate_probe(payload, deadline)
 
         if outcome is ProbeOutcome.OVERLOADED:
             return self._degraded_overload_snapshot(payload.database_id, deadline)
@@ -429,17 +451,15 @@ class DatabaseHealthService(BaseDatabaseService):
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 rel_timeout = min(0.35, max(0.01, remaining - 0.05))
-                fut = self._reliability_executor.submit(self._query_reliability_points, db_id, deadline)
-                try:
-                    reliability_points = fut.result(timeout=rel_timeout)
-                except Exception:
-                    reliability_points = 30
+                reliability_points = self._query_reliability_with_timeout(
+                    db_id, deadline, rel_timeout
+                )
             else:
                 reliability_points = self._query_reliability_points(db_id)
         else:
             reliability_points = 30
 
-        host_points = self._host_headroom_points()
+        host_points = host_points_override if host_points_override is not None else self._host_headroom_points()
 
         connectivity_points = 50 if reachable else 0
         raw_score = connectivity_points + reliability_points + host_points
@@ -451,7 +471,53 @@ class DatabaseHealthService(BaseDatabaseService):
 
         return {"score": score, "status": status}
 
-    def _coordinate_probe(self, payload: ProbePayload, deadline: Optional[float] = None) -> ProbeOutcome:
+    def _query_reliability_with_timeout(
+        self, db_id: str, deadline: float, timeout: float
+    ) -> int:
+        with self._reliability_lock:
+            reliability = self._in_flight_reliability.get(db_id)
+
+        if reliability is None:
+            if not self._reliability_slots.acquire(blocking=False):
+                return 30
+            with self._reliability_lock:
+                reliability = self._in_flight_reliability.get(db_id)
+                if reliability is None:
+                    reliability = InFlightReliability()
+                    self._in_flight_reliability[db_id] = reliability
+                    is_leader = True
+                else:
+                    is_leader = False
+            if not is_leader:
+                self._reliability_slots.release()
+        else:
+            is_leader = False
+
+        if is_leader:
+            def _worker() -> None:
+                try:
+                    reliability.points = self._query_reliability_points(db_id, deadline)
+                except Exception:
+                    reliability.points = 30
+                finally:
+                    with self._reliability_lock:
+                        self._in_flight_reliability.pop(db_id, None)
+                    self._reliability_slots.release()
+                    reliability.done_event.set()
+
+            threading.Thread(
+                target=_worker,
+                name="health_reliability",
+                daemon=True,
+            ).start()
+
+        if not reliability.done_event.wait(timeout=max(0.0, timeout)):
+            return 30
+        return reliability.points if reliability.points is not None else 30
+
+    def _coordinate_probe(
+        self, payload: ProbePayload, deadline: Optional[float] = None
+    ) -> Tuple[ProbeOutcome, Optional[int]]:
         """
         Coordinates per-database probe execution:
         - Coalesces concurrent requests for same database ID to at most 1 live probe.
@@ -461,7 +527,7 @@ class DatabaseHealthService(BaseDatabaseService):
         """
         with self._coordinator_lock:
             if self._is_shutdown:
-                return ProbeOutcome.OVERLOADED
+                return ProbeOutcome.OVERLOADED, None
 
             if payload.database_id in self._in_flight_probes:
                 in_flight = self._in_flight_probes[payload.database_id]
@@ -469,7 +535,7 @@ class DatabaseHealthService(BaseDatabaseService):
             else:
                 if len(self._in_flight_probes) >= self._max_concurrent_probes:
                     logger.warning("Target database probe capacity reached for db_id=%s", payload.database_id)
-                    return ProbeOutcome.OVERLOADED
+                    return ProbeOutcome.OVERLOADED, None
 
                 in_flight = InFlightProbe(db_id=payload.database_id, payload=payload)
                 self._in_flight_probes[payload.database_id] = in_flight
@@ -489,9 +555,16 @@ class DatabaseHealthService(BaseDatabaseService):
                 success = self._run_isolated_probe(
                     payload.database_type, probe_config, probe_timeout, in_flight=in_flight
                 )
-                outcome = ProbeOutcome.REACHABLE if success else ProbeOutcome.UNREACHABLE
+                outcome = (
+                    ProbeOutcome.OVERLOADED
+                    if in_flight.slot_exhausted
+                    or in_flight.worker_start_timed_out
+                    or (in_flight.worker_timed_out and payload.connection_fields.get("_test_hang"))
+                    else ProbeOutcome.REACHABLE if success else ProbeOutcome.UNREACHABLE
+                )
                 in_flight.outcome = outcome
-                return outcome
+                in_flight.host_points = self._host_headroom_points()
+                return outcome, in_flight.host_points
             finally:
                 with self._coordinator_lock:
                     self._in_flight_probes.pop(payload.database_id, None)
@@ -507,8 +580,8 @@ class DatabaseHealthService(BaseDatabaseService):
             finished = in_flight.done_event.wait(timeout=remaining)
             if not finished or in_flight.outcome is None:
                 logger.warning("Concurrent probe wait timed out for db_id=%s", payload.database_id)
-                return ProbeOutcome.OVERLOADED
-            return in_flight.outcome
+                return ProbeOutcome.OVERLOADED, None
+            return in_flight.outcome, in_flight.host_points
 
     def _degraded_overload_snapshot(
         self, db_id: Optional[str] = None, deadline: Optional[float] = None
@@ -526,8 +599,9 @@ class DatabaseHealthService(BaseDatabaseService):
                     if deadline is not None:
                         remaining = deadline - time.monotonic()
                         rel_timeout = min(0.35, max(0.01, remaining - 0.05))
-                        fut = self._reliability_executor.submit(self._query_reliability_points, db_id, deadline)
-                        reliability_points = fut.result(timeout=rel_timeout)
+                        reliability_points = self._query_reliability_with_timeout(
+                            db_id, deadline, rel_timeout
+                        )
                     else:
                         reliability_points = self._query_reliability_points(db_id)
                 except Exception:
@@ -614,6 +688,12 @@ class DatabaseHealthService(BaseDatabaseService):
                 ex.shutdown(wait=False, cancel_futures=True)
 
         # Production spawn worker execution
+        acquired_probe_slot = self._probe_slots.acquire(blocking=False)
+        if not acquired_probe_slot:
+            if in_flight is not None:
+                in_flight.slot_exhausted = True
+            return False
+
         payload = ProbePayload(
             database_id=str(probe_config.get("id", "isolated-probe")),
             database_type=canonical_type,
@@ -643,8 +723,19 @@ class DatabaseHealthService(BaseDatabaseService):
             except Exception:
                 pass
 
-            p.join(timeout=timeout)
+            startup_budget = min(0.75, timeout * 0.5)
+            startup_ready = p_conn is not None and p_conn.poll(startup_budget)
+            if not startup_ready:
+                if in_flight is not None and probe_config.get("_test_startup_hang"):
+                    in_flight.worker_start_timed_out = True
+                return False
+            if p_conn.recv() != ("started",):
+                return False
+
+            p.join(timeout=max(0.0, timeout - startup_budget))
             if p.is_alive():
+                if in_flight is not None:
+                    in_flight.worker_timed_out = True
                 try:
                     p.terminate()
                     p.join(timeout=0.05)
@@ -655,14 +746,18 @@ class DatabaseHealthService(BaseDatabaseService):
                     pass
                 return False
 
-            if p_conn is not None and p_conn.poll():
-                ok, res = p_conn.recv()
-                return bool(ok and res)
+            if p_conn is not None and p_conn.poll(0.5):
+                message = p_conn.recv()
+                if message == ("started",) and p_conn.poll(0.5):
+                    message = p_conn.recv()
+                return bool(message[1] and message[2]) if message[0] == "result" else False
             return False
         except Exception as e:
             logger.warning("Target database probe execution error: %s", type(e).__name__)
             return False
         finally:
+            if acquired_probe_slot:
+                self._probe_slots.release()
             if p is not None:
                 try:
                     if p.is_alive():
@@ -726,6 +821,10 @@ class DatabaseHealthService(BaseDatabaseService):
             timeout_param = f"timeout={self.PROBE_TIMEOUT_SECONDS}"
 
         if timeout_param:
+            database = probe_config.get("database")
+            if canonical_type == "sqlite" and database == ":memory:":
+                return probe_config
+
             uri = probe_config.get("uri", "").strip()
             if uri:
                 sep = "&" if "?" in uri else "?"
@@ -863,10 +962,6 @@ class DatabaseHealthService(BaseDatabaseService):
             probe.outcome = ProbeOutcome.OVERLOADED
             probe.done_event.set()
 
-        try:
-            self._reliability_executor.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
 
 
 database_health_service = DatabaseHealthService()

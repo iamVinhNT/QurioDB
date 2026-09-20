@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 from models.base import Base
 from models import Db, QueryHistory
-from services.database_health_service import DatabaseHealthService
+from services.database_health_service import DatabaseHealthService, InFlightReliability, ProbePayload, _spawn_probe_worker
 
 
 @pytest.fixture
@@ -100,6 +100,29 @@ def silent_tcp_server():
 
 
 class TestTargetProbe:
+    def test_spawn_worker_emits_started_marker_before_probe_result(self):
+        """Spawn protocol exposes worker start before target probe completion."""
+        class RecordingConnection:
+            def __init__(self):
+                self.messages = []
+
+            def send(self, message):
+                self.messages.append(message)
+
+            def close(self):
+                pass
+
+        conn = RecordingConnection()
+        payload = ProbePayload(
+            database_id="protocol-db",
+            database_type="sqlite",
+            connection_fields={"database": ":memory:"},
+        )
+        _spawn_probe_worker(payload, conn)
+
+        assert conn.messages[0] == ("started",)
+        assert conn.messages[-1][0] == "result"
+
     def test_probe_timeout_configuration(self, health_service):
         """Probe must enforce a timeout <= 2 seconds."""
         assert hasattr(health_service, "PROBE_TIMEOUT_SECONDS")
@@ -109,6 +132,15 @@ class TestTargetProbe:
         """Real SQLite :memory: database probe executes SELECT 1 successfully."""
         reachable = health_service._probe_target(sample_db_config)
         assert reachable is True
+
+    def test_memory_sqlite_probe_keeps_uri_out_of_timeout_configuration(self, health_service):
+        """In-memory SQLite must remain spawn-isolated instead of becoming a URI database."""
+        configured = health_service._configure_probe_timeout(
+            "sqlite", {"database": ":memory:"}
+        )
+
+        assert configured.get("uri") is None
+        assert configured.get("useUri") is None
 
     def test_probe_failure_returns_false_and_no_secrets(self, health_service):
         """Probe failure safely returns False without raising or exposing secrets."""
@@ -287,6 +319,20 @@ class TestTargetProbe:
             assert reachable is False
             assert elapsed <= 2.0, f"Hung probe waited too long: {elapsed}s"
 
+    def test_spawn_worker_timeout_returns_degraded_not_unreachable(
+        self, health_service, sample_db_config
+    ):
+        """A child that exceeds its join deadline is local overload, not target failure."""
+        def timed_out_worker(*args, **kwargs):
+            kwargs["in_flight"].worker_start_timed_out = True
+            return False
+
+        with patch.object(health_service, "_run_isolated_probe", side_effect=timed_out_worker):
+            snapshot = health_service.get_snapshot(sample_db_config, deadline=time.monotonic() + 1.0)
+
+        assert snapshot["status"] == "Degraded"
+        assert 50 <= snapshot["score"] <= 89
+
     def test_silent_tcp_listener_deadline_and_score_below_50_with_max_components(
         self, health_service, silent_tcp_server, caplog
     ):
@@ -329,6 +375,66 @@ class TestTargetProbe:
 
 
 class TestQueryReliability:
+    def test_reliability_timeout_caps_background_workers(self, health_service):
+        """Timed-out reliability calls must not create an unbounded worker backlog."""
+        started = 0
+        started_lock = threading.Lock()
+        release = threading.Event()
+
+        def _blocked_reliability(*args, **kwargs):
+            nonlocal started
+            with started_lock:
+                started += 1
+            release.wait(timeout=2.0)
+            return 30
+
+        with patch.object(health_service, "_query_reliability_points", side_effect=_blocked_reliability):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = [
+                        executor.submit(
+                            health_service._query_reliability_with_timeout,
+                            f"db-{index}",
+                            time.monotonic() + 1.0,
+                            0.01,
+                        )
+                        for index in range(8)
+                    ]
+                    assert all(future.result() == 30 for future in futures)
+
+                assert started <= health_service.MAX_RELIABILITY_WORKERS
+            finally:
+                release.set()
+
+    def test_reliability_admission_does_not_hold_lock_while_slots_are_busy(self, health_service):
+        """Busy reliability workers must not block their completion path on the coordination lock."""
+        db_ids = [f"existing-db-{index}" for index in range(health_service.MAX_RELIABILITY_WORKERS)]
+        for db_id in db_ids:
+            assert health_service._reliability_slots.acquire(blocking=False)
+            with health_service._reliability_lock:
+                health_service._in_flight_reliability[db_id] = InFlightReliability()
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    health_service._query_reliability_with_timeout,
+                    "new-db",
+                    time.monotonic() + 0.05,
+                    0.05,
+                )
+                assert future.result(timeout=0.2) == 30
+
+            for db_id in db_ids:
+                with health_service._reliability_lock:
+                    reliability = health_service._in_flight_reliability.pop(db_id)
+                reliability.done_event.set()
+                health_service._reliability_slots.release()
+
+            assert health_service._reliability_slots.acquire(blocking=False)
+            health_service._reliability_slots.release()
+        finally:
+            health_service._in_flight_reliability.clear()
+
     def test_empty_history_yields_neutral_30_points(self, health_service, mock_session):
         """No query history records yield the neutral 30 points."""
         mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
@@ -895,10 +1001,67 @@ class TestHardenedProbeCoordinator:
 
         assert elapsed <= 2.0, f"Concurrent requests took too long: {elapsed}s"
         assert len(results) == 17
-        assert all(r["status"] == "Healthy" for r in results)
-        assert all(r["score"] >= 90 for r in results)
+        assert all(r["status"] == "Healthy" for r in results), {
+            "statuses": [(r["score"], r["status"]) for r in results],
+            "results": results,
+            "probe_starts": health_service._probe_start_count,
+            "in_flight": list(health_service._in_flight_probes),
+            "elapsed": elapsed,
+        }
+        assert all(r["score"] >= 90 for r in results), results
         # Probe start count must be at most 1
         assert getattr(health_service, "_probe_start_count", 0) <= 1
+
+    def test_probe_slot_exhaustion_returns_degraded_not_unreachable(
+        self, health_service, sample_db_config
+    ):
+        """Process-slot exhaustion is local overload, not target database failure."""
+        held_slots = [
+            health_service._probe_slots.acquire(blocking=False)
+            for _ in range(health_service.MAX_CONCURRENT_PROBE_PROCESSES)
+        ]
+        assert all(held_slots)
+        try:
+            snapshot = health_service.get_snapshot(
+                SimpleNamespace(
+                    id="slot-exhausted-db",
+                    type="sqlite",
+                    databaseName="test_db",
+                    config={"database": ":memory:"},
+                ),
+                deadline=time.monotonic() + 1.0,
+            )
+        finally:
+            for held in held_slots:
+                if held:
+                    health_service._probe_slots.release()
+
+        assert snapshot["status"] == "Degraded"
+        assert 50 <= snapshot["score"] <= 89
+
+    def test_distinct_probe_requests_share_process_capacity(self, health_service):
+        """Requests beyond process capacity overload without starting excess probes."""
+        configs = [
+            SimpleNamespace(
+                id=f"capacity-db-{index}",
+                type="sqlite",
+                databaseName="test_db",
+                config={"_test_hang": 0.2, "database": ":memory:"},
+            )
+            for index in range(8)
+        ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            snapshots = [
+                future.result()
+                for future in [executor.submit(health_service.get_snapshot, config) for config in configs]
+            ]
+
+        assert all(snapshot["status"] != "Unreachable" for snapshot in snapshots), {
+            "snapshots": snapshots,
+            "probe_starts": health_service._probe_start_count,
+            "in_flight": list(health_service._in_flight_probes),
+        }
+        assert health_service._probe_start_count <= health_service.MAX_CONCURRENT_PROBE_PROCESSES
 
     def test_capacity_exhaustion_does_not_mark_healthy_target_unreachable(
         self, health_service, sample_db_config

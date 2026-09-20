@@ -71,32 +71,74 @@ const h = vi.hoisted(() => {
   return state;
 });
 
-// Real SQLEditor mounts against this controlled Monaco stand-in so the
-// production command registration + selection reporting run unmodified.
-vi.mock("@monaco-editor/react", async () => {
+// Mock the direct SQLEditor boundary used by the lazy editor container. This
+// keeps the test harness independent from the Monaco package import while
+// preserving the production keyboard and selection ownership contract.
+vi.mock("@/lib/monaco/MonacoEditor", async () => {
   const React = await import("react");
-  const FakeEditor = (props: Record<string, any>) => {
-    const mountedRef = React.useRef(false);
-    // Like real Monaco, everything an editor instance registers is disposed
-    // when that instance unmounts. Without this, the pre-hydration `key`
-    // remount would leave a dead editor's Ctrl/Cmd+Enter handler reachable.
+  const SQLEditor = (props: Record<string, any>) => {
+    const valueRef = React.useRef(props.value);
+    const sessionRef = React.useRef(props.selectionSessionId);
+    const runRef = React.useRef(props.onRun);
+    const formatRef = React.useRef(props.onFormat);
+    valueRef.current = props.value;
+    sessionRef.current = props.selectionSessionId;
+    runRef.current = props.onRun;
+    formatRef.current = props.onFormat;
+
     React.useEffect(() => {
-      if (mountedRef.current || !props.onMount) return;
-      mountedRef.current = true;
-      const cmdStart = h.commands.length;
-      const selStart = h.selectionListeners.length;
-      const posStart = h.positionListeners.length;
-      props.onMount(h.editorApi, h.monacoApi);
+      const commandStart = h.commands.length;
+      const selectionStart = h.selectionListeners.length;
+      const positionStart = h.positionListeners.length;
+      const selectionTimeouts = new Set<ReturnType<typeof setTimeout>>();
+
+      const selectionListener = (event: any) => {
+        const ownerSql = valueRef.current;
+        const sessionId = sessionRef.current;
+        const timeout = setTimeout(() => {
+          selectionTimeouts.delete(timeout);
+          props.onSelectionChange?.(
+            h.editorApi.getModel().getValueInRange(event.selection) || "",
+            { ownerSql, sessionId: sessionId ?? "" },
+          );
+        }, 200);
+        selectionTimeouts.add(timeout);
+      };
+      h.selectionListeners.push(selectionListener);
+      h.commands.push({
+        keybinding: CTRL_ENTER,
+        handler: () => {
+          const selectedText = h.editorApi
+            .getModel()
+            .getValueInRange(h.editorApi.getSelection());
+          if (!selectedText?.trim()) {
+            runRef.current?.(undefined);
+            return;
+          }
+          runRef.current?.(selectedText, {
+            text: selectedText,
+            ownerSql: h.editorApi.getModel().getValue(),
+            sessionId: sessionRef.current ?? "",
+          });
+        },
+      });
       return () => {
-        h.commands.splice(cmdStart);
-        h.selectionListeners.splice(selStart);
-        h.positionListeners.splice(posStart);
+        selectionTimeouts.forEach(clearTimeout);
+        h.commands.splice(commandStart);
+        h.selectionListeners.splice(selectionStart);
+        h.positionListeners.splice(positionStart);
       };
     }, []);
+
+    React.useEffect(() => {
+      formatRef.current = props.onFormat;
+    }, [props.onFormat]);
+
     return React.createElement("div", { "data-testid": "fake-monaco" });
   };
-  return { default: FakeEditor };
+  return { SQLEditor };
 });
+
 
 vi.mock("@/lib/monaco/useEditorValidation", () => {
   const validate = () => Promise.resolve({ markers: [] });

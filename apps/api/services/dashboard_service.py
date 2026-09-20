@@ -3,9 +3,10 @@ dashboard_service.py
 Service for gathering database statistics and metrics.
 """
 
-import concurrent.futures
 import logging
 import os
+import queue
+import threading
 import time
 from typing import Any, Dict, List
 
@@ -17,16 +18,36 @@ from .database_health_service import database_health_service
 
 logger = logging.getLogger(__name__)
 
-# Persistent executor for analytics calls to prevent context-manager shutdown(wait=True) blocking
-_analytics_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=4,
-    thread_name_prefix="dashboard_analytics"
-)
-
-
 class DashboardService:
     TOTAL_DEADLINE_SECONDS = 1.85
     ANALYTICS_TIMEOUT_SECONDS = 0.35
+    MAX_ANALYTICS_WORKERS = 4
+
+    def __init__(self):
+        self._analytics_slots = threading.BoundedSemaphore(self.MAX_ANALYTICS_WORKERS)
+
+    def _fetch_analytics_with_timeout(self, fetch_analytics, timeout):
+        if not self._analytics_slots.acquire(blocking=False):
+            raise TimeoutError
+
+        results = queue.Queue(maxsize=1)
+
+        def _worker():
+            try:
+                results.put((True, fetch_analytics()))
+            except Exception as error:
+                results.put((False, error))
+            finally:
+                self._analytics_slots.release()
+
+        threading.Thread(target=_worker, name="dashboard_analytics", daemon=True).start()
+        try:
+            completed, result = results.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError
+        if not completed:
+            raise result
+        return result
 
     def _safe_fallback_stats(self) -> Dict[str, Any]:
         """Returns safe compatible fallback stats payload when budget is exhausted or error occurs."""
@@ -78,9 +99,10 @@ class DashboardService:
                     dist = analytics_service.get_status_distribution()
                     return trends, dist
 
-                fut = _analytics_executor.submit(_fetch_analytics)
                 try:
-                    res_trends, res_dist = fut.result(timeout=remaining_analytics)
+                    res_trends, res_dist = self._fetch_analytics_with_timeout(
+                        _fetch_analytics, remaining_analytics
+                    )
                     if isinstance(res_trends, list):
                         analytics_stats = res_trends
                     if isinstance(res_dist, list):
