@@ -104,35 +104,81 @@ jobs:
       - name: Smoke-test Windows FastAPI sidecar
         shell: pwsh
         run: |
+          function Write-SidecarLogs {
+            param(
+              [string]$stdoutPath,
+              [string]$stderrPath
+            )
+            Write-Host 'Windows sidecar stdout:'
+            if (Test-Path -LiteralPath $stdoutPath) {
+              Get-Content -LiteralPath $stdoutPath
+            }
+            Write-Host 'Windows sidecar stderr:'
+            if (Test-Path -LiteralPath $stderrPath) {
+              Get-Content -LiteralPath $stderrPath
+            }
+          }
+
           $binary = Join-Path $pwd 'apps/desktop/src-tauri/bin/api-x86_64-pc-windows-msvc.exe'
           $port = python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
           $env:QURIODB_DESKTOP_PORT = $port.Trim()
+          $env:QURIODB_STARTUP_NONCE = [guid]::NewGuid().ToString('N')
+          $env:QURIODB_DESKTOP_PARENT_PID = $PID
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "quriodb-sidecar-$PID.stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "quriodb-sidecar-$PID.stderr.log"
           $process = $null
           try {
-            $process = Start-Process -FilePath $binary -PassThru
+            $process = Start-Process -FilePath $binary -PassThru `
+              -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
             $healthy = $false
-            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            for ($attempt = 0; $attempt -lt 180; $attempt++) {
               if ($process.HasExited) {
                 throw "Windows sidecar exited with code $($process.ExitCode)"
               }
               try {
-                $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($env:QURIODB_DESKTOP_PORT)/health"
-                if ($response.StatusCode -eq 200) {
-                  $healthy = $true
-                  break
-                }
+                $response = Invoke-WebRequest -UseBasicParsing `
+                  -Uri "http://127.0.0.1:$($env:QURIODB_DESKTOP_PORT)/api/desktop/health" `
+                  -Headers @{ 'X-QurioDB-Startup-Nonce' = $env:QURIODB_STARTUP_NONCE }
               } catch {
                 Start-Sleep -Milliseconds 500
+                continue
               }
+              if ($response.StatusCode -ne 200) {
+                Start-Sleep -Milliseconds 500
+                continue
+              }
+              try {
+                $body = $response.Content | ConvertFrom-Json
+              } catch {
+                throw 'Windows sidecar returned malformed desktop health JSON'
+              }
+              $properties = @($body.PSObject.Properties)
+              if ($properties.Count -ne 2 -or $body.status -ne 'ok' -or $body.service -ne 'quriodb-desktop') {
+                throw 'Windows sidecar returned an invalid desktop health body'
+              }
+              $healthy = $true
+              break
             }
             if (-not $healthy) {
-              throw 'Windows sidecar did not return a healthy /health response'
+              throw 'Windows sidecar did not return a healthy /api/desktop/health response within 90 seconds'
             }
+          } catch {
+            Write-SidecarLogs -stdoutPath $stdoutLog -stderrPath $stderrLog
+            throw
           } finally {
-            if ($process -and -not $process.HasExited) {
-              & taskkill.exe /F /T /PID $process.Id | Out-Null
+            if ($process) {
+              try {
+                & taskkill.exe /F /T /PID $process.Id | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "taskkill failed for Windows sidecar PID $($process.Id)"
+                }
+              } catch {
+                Write-Warning "Could not clean up Windows sidecar PID $($process.Id): $($_.Exception.Message)"
+              }
             }
             Remove-Item Env:QURIODB_DESKTOP_PORT -ErrorAction SilentlyContinue
+            Remove-Item Env:QURIODB_STARTUP_NONCE -ErrorAction SilentlyContinue
+            Remove-Item Env:QURIODB_DESKTOP_PARENT_PID -ErrorAction SilentlyContinue
           }
       - name: Build Windows MSI and NSIS bundles
         shell: pwsh

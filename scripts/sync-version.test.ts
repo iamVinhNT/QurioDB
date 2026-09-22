@@ -423,6 +423,40 @@ describe("Desktop release workflow", () => {
     expect(workflow.slice(linuxSmokeIndex, linuxTauriIndex)).toContain("trap cleanup EXIT");
   });
 
+  it("uses the authenticated desktop readiness contract for the Windows smoke test", () => {
+    const workflow = fs.readFileSync(workflowPath, "utf-8");
+    const smokeStart = workflow.indexOf("Smoke-test Windows FastAPI sidecar");
+    const buildStart = workflow.indexOf("Build Windows MSI and NSIS bundles");
+    const smoke = workflow.slice(smokeStart, buildStart);
+
+    expect(smoke).toMatch(/\$env:QURIODB_STARTUP_NONCE\s*=\s*\[guid\]::NewGuid\(\)\.ToString\('N'\)/);
+    expect(smoke).toContain("$env:QURIODB_DESKTOP_PARENT_PID = $PID");
+    expect(smoke).toContain("-RedirectStandardOutput $stdoutLog");
+    expect(smoke).toContain("-RedirectStandardError $stderrLog");
+    expect(smoke).toContain("$stdoutLog = Join-Path $env:RUNNER_TEMP");
+    expect(smoke).toContain("$stderrLog = Join-Path $env:RUNNER_TEMP");
+    expect(smoke).toMatch(/function Write-SidecarLogs\s*\{[\s\S]*?param\(\s*\[string\]\$stdoutPath,\s*\[string\]\$stderrPath\s*\)[\s\S]*?Get-Content -LiteralPath \$stdoutPath[\s\S]*?Get-Content -LiteralPath \$stderrPath[\s\S]*?\}/);
+    expect(smoke).toContain("Write-SidecarLogs -stdoutPath $stdoutLog -stderrPath $stderrLog");
+    const logCallIndex = smoke.indexOf("Write-SidecarLogs -stdoutPath $stdoutLog -stderrPath $stderrLog");
+    const throwIndex = smoke.indexOf("throw\n", logCallIndex);
+    expect(logCallIndex).toBeGreaterThanOrEqual(0);
+    expect(throwIndex).toBeGreaterThan(logCallIndex);
+    expect(smoke).toContain("/api/desktop/health");
+    expect(smoke).toContain('X-QurioDB-Startup-Nonce');
+    expect(smoke).toContain("$body.status -ne 'ok'");
+    expect(smoke).toContain("$body.service -ne 'quriodb-desktop'");
+    expect(smoke).toContain("$attempt -lt 180");
+    expect(smoke).toContain("Start-Sleep -Milliseconds 500");
+    expect(smoke).toContain("Get-Content -LiteralPath $stdoutPath");
+    expect(smoke).toContain("Get-Content -LiteralPath $stderrPath");
+    expect(smoke).toContain("catch {");
+    expect(smoke).toContain("finally {");
+    expect(smoke).toContain("taskkill.exe /F /T /PID");
+    expect(smoke).toContain("Remove-Item Env:QURIODB_DESKTOP_PORT");
+    expect(smoke).toContain("Remove-Item Env:QURIODB_STARTUP_NONCE");
+    expect(smoke).toContain("Remove-Item Env:QURIODB_DESKTOP_PARENT_PID");
+  });
+
   it("requires exact stable versions for tag releases and manual preflight", () => {
     const workflow = fs.readFileSync(workflowPath, "utf-8");
     const stableTag = /^v\d+\.\d+\.\d+$/;
