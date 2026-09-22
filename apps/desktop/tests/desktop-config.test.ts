@@ -98,7 +98,7 @@ describe('Desktop Configuration', () => {
       }
     });
 
-    it('should filter sensitive files from every shipped PyInstaller spec', () => {
+    it('should filter the datas passed to Analysis in every shipped PyInstaller spec', () => {
       const specs = fs
         .readdirSync(API_SPECS_DIR)
         .filter((name) => /^api-.*\.spec$/.test(name));
@@ -111,8 +111,24 @@ describe('Desktop Configuration', () => {
 
       for (const specName of specs) {
         const spec = fs.readFileSync(path.join(API_SPECS_DIR, specName), 'utf-8');
+        const analysisStart = spec.indexOf('a = Analysis(');
+        const analysisEnd = spec.indexOf('\n)', analysisStart);
+        const analysisArguments = spec.slice(analysisStart, analysisEnd);
+        const filter = 'datas = _filter_sensitive_bundle_data(datas)';
+        const filterIndex = spec.indexOf(filter);
+        const datasDeclaration = spec.match(/^datas\s*=\s*\[\s*\]\s*$/m);
+        const datasDeclarationIndex = datasDeclaration?.index ?? -1;
+
+        expect(analysisStart, `${specName} should define Analysis`).toBeGreaterThanOrEqual(0);
+        expect(analysisEnd, `${specName} should close Analysis`).toBeGreaterThan(analysisStart);
         expect(spec).toContain('_filter_sensitive_bundle_data');
-        expect(spec).toContain('datas = _filter_sensitive_bundle_data(datas)');
+        expect(datasDeclarationIndex, `${specName} should define datas`).toBeGreaterThanOrEqual(0);
+        expect(datasDeclarationIndex).toBeLessThan(filterIndex);
+        expect(filterIndex, `${specName} should filter datas before Analysis`).toBeGreaterThanOrEqual(0);
+        expect(filterIndex).toBeLessThan(analysisStart);
+        expect(analysisArguments).toMatch(/\bdatas\s*=\s*datas\b/);
+        expect(analysisArguments).not.toMatch(/\bdatas\s*=\s*\[\s*\]/);
+        expect(spec.indexOf(filter, analysisEnd)).toBe(-1);
         expect(spec).toContain('.env.');
         expect(spec).toContain('.pem');
         expect(spec).toContain('.key');

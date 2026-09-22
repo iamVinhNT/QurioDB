@@ -12,11 +12,15 @@ def _filter_sensitive_bundle_data(entries):
     ]
 
 
+datas = []
+datas = _filter_sensitive_bundle_data(datas)
+
+
 a = Analysis(
     ['../app.py'],
     pathex=[],
     binaries=collect_dynamic_libs('sqlite_vec'),
-    datas=[],
+    datas=datas,
     hiddenimports=[
         'passlib.handlers.bcrypt',
         'bcrypt',
@@ -41,7 +45,6 @@ a = Analysis(
     excludes=[],
     noarchive=False,
 )
-datas = _filter_sensitive_bundle_data(datas)
 pyz = PYZ(a.pure)
 
 exe = EXE(

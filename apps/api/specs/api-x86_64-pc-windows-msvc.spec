@@ -14,12 +14,15 @@ def _filter_sensitive_bundle_data(entries):
 
 block_cipher = None
 
+datas = []
+datas = _filter_sensitive_bundle_data(datas)
+
 
 a = Analysis(
     ['../app.py'],
     pathex=[],
     binaries=collect_dynamic_libs('sqlite_vec'),
-    datas=[],
+    datas=datas,
     hiddenimports=[
         'uvicorn.logging',
         'uvicorn.loops.auto',
@@ -52,7 +55,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-datas = _filter_sensitive_bundle_data(datas)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
