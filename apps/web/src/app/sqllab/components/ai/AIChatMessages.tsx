@@ -13,7 +13,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AIMessage, type MessageUiState } from "./AIMessage";
-import { Message, SqlDataPreview } from "./types";
+import { Message } from "./types";
 
 interface AIChatMessagesProps {
   messages: Message[];
@@ -24,7 +24,6 @@ interface AIChatMessagesProps {
   conversationId?: string | null;
   onExplain: (sql: string) => void;
   onOptimize: (sql: string) => void;
-  onShowSqlData: (sql: string) => Promise<SqlDataPreview>;
   onSuggestionClick: (suggestion: string) => void;
 }
 
@@ -49,7 +48,6 @@ const AIChatMessagesComponent = ({
   conversationId,
   onExplain,
   onOptimize,
-  onShowSqlData,
   onSuggestionClick
 }: AIChatMessagesProps) => {
   // The streaming message is the tail item of the same virtualized list; its
@@ -136,7 +134,6 @@ const AIChatMessagesComponent = ({
                     message={message}
                     onExplain={onExplain}
                     onOptimize={onOptimize}
-                    onShowSqlData={onShowSqlData}
                     onSuggestionClick={onSuggestionClick}
                     conversationId={conversationId}
                     messageUiState={messageUiStateRef.current.get(message.id)}

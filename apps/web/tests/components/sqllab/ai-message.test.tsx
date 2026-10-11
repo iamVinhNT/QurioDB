@@ -95,7 +95,7 @@ describe("AIMessage", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("replaces SQL apply, preview, and diff actions with show data", () => {
+  it("renders query tools without a manual data button", () => {
     render(
       <AIMessage
         message={{
@@ -112,34 +112,45 @@ describe("AIMessage", () => {
     expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^preview$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^diff$/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /hiển thị dữ liệu/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /hiển thị dữ liệu/i })).not.toBeInTheDocument();
   });
 
-  it("renders queried SQL data inside the assistant message", async () => {
-    const onShowSqlData = vi.fn().mockResolvedValue({
-      columns: ["id", "name"],
-      data: [{ id: 1, name: "Alice" }],
-      executionTime: 12,
-    });
-
+  it("renders server query data immediately without executing again", () => {
     render(
       <AIMessage
-        message={{
-          id: "assistant-sql-preview",
-          role: "assistant",
-          content: "",
-          sql: "SELECT * FROM users;",
-        }}
-        onExplain={vi.fn()}
-        onOptimize={vi.fn()}
-        onShowSqlData={onShowSqlData}
+        message={{ id: "result", role: "assistant", content: "", sql: "SELECT * FROM users;",
+          columns: ["id", "name"], data: [{ id: 1, name: "Alice" }] }}
+        onExplain={vi.fn()} onOptimize={vi.fn()}
       />,
     );
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /hiển thị dữ liệu/i })).not.toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByRole("button", { name: /hiển thị dữ liệu/i }));
+  it("renders MongoDB queries, nested values and every bounded row and column", () => {
+    const { container } = render(
+      <AIMessage
+        message={{ id: "mongo", role: "assistant", content: "", queryLanguage: "mongodb",
+          queryText: 'db.orders.find({"status":"paid"})',
+          columns: ["customer", "profile", "items", "active", "amount", "status"],
+          data: Array.from({ length: 6 }, (_, i) => ({ customer: `Customer ${i}`,
+            profile: { city: "Hanoi" }, items: [{ sku: "A" }], active: false, amount: 120, status: "paid" })) }}
+        onExplain={vi.fn()} onOptimize={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("MongoDB Query")).toBeInTheDocument();
+    expect(container.querySelector("pre code")).toHaveTextContent('db.orders.find({"status":"paid"})');
+    expect(screen.getByText("Customer 5")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "status" })).toBeInTheDocument();
+    expect(screen.getAllByText('{"city":"Hanoi"}')).toHaveLength(6);
+    expect(screen.getAllByText('[{"sku":"A"}]')).toHaveLength(6);
+    expect(screen.getAllByText("false")).toHaveLength(6);
+  });
 
-    expect(onShowSqlData).toHaveBeenCalledWith("SELECT * FROM users;");
-    expect(await screen.findByText("Alice")).toBeInTheDocument();
+  it("renders an empty successful result without a data button", () => {
+    render(<AIMessage message={{ id: "empty", role: "assistant", content: "", columns: [], data: [] }}
+      onExplain={vi.fn()} onOptimize={vi.fn()} />);
+    expect(screen.getByText("Truy vấn thành công, không có dữ liệu phù hợp.")).toBeInTheDocument();
   });
 
   it("reveals saved thinking activity even when the assistant message has SQL", async () => {

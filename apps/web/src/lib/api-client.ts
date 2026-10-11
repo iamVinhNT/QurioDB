@@ -324,7 +324,7 @@ export const aiApi = {
   },
   streamChat: async (
     data: any,
-    onChunk: (chunk: string, event?: string) => void,
+    onChunk: (chunk: any, event?: string) => void,
     onHeaders?: (headers: Headers) => void,
     signal?: AbortSignal,
   ) => {
@@ -333,7 +333,7 @@ export const aiApi = {
   streamAction: async (
     action: "explain" | "optimize",
     data: Record<string, unknown>,
-    onChunk: (chunk: string, event?: string) => void,
+    onChunk: (chunk: any, event?: string) => void,
     onHeaders?: (headers: Headers) => void,
     signal?: AbortSignal,
   ) => {
@@ -347,7 +347,7 @@ export const aiApi = {
 async function streamSSE(
   endpoint: string,
   data: any,
-  onChunk: (chunk: string, event?: string) => void,
+  onChunk: (chunk: any, event?: string) => void,
   onHeaders?: (headers: Headers) => void,
   signal?: AbortSignal,
 ) {

@@ -13,7 +13,7 @@ import { aiApi } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
 // Types
-import { Message, SqlDataPreview } from "./types";
+import { Message } from "./types";
 
 // Sub-components
 import { DataTablePreview } from "./DataTablePreview";
@@ -39,15 +39,12 @@ export interface MessageUiState {
   shouldShowCorrection: boolean;
   correctionText: string;
   isFeedbackSubmitted: boolean;
-  sqlPreview: SqlDataPreview | null;
-  sqlPreviewError: string;
 }
 
 interface AIMessageProps {
   message: Message;
   onExplain: (sql: string) => void;
   onOptimize: (sql: string) => void;
-  onShowSqlData?: (sql: string) => Promise<SqlDataPreview>;
   onSuggestionClick?: (suggestion: string) => void;
   conversationId?: string | null;
   messageUiState?: Partial<MessageUiState>;
@@ -55,13 +52,11 @@ interface AIMessageProps {
 }
 
 const noopSuggestionClick = () => {};
-const noopShowSqlData = async (): Promise<SqlDataPreview> => ({ columns: [], data: [] });
 
 const AIMessageComponent = ({
   message,
   onExplain,
   onOptimize,
-  onShowSqlData = noopShowSqlData,
   onSuggestionClick,
   conversationId,
   messageUiState,
@@ -77,9 +72,6 @@ const AIMessageComponent = ({
   const [shouldShowCorrection, setShouldShowCorrection] = useState(() => messageUiState?.shouldShowCorrection ?? false);
   const [correctionText, setCorrectionText] = useState(() => messageUiState?.correctionText ?? "");
   const [isFeedbackSubmitted, setIsFeedbackSubmitted] = useState(() => messageUiState?.isFeedbackSubmitted ?? false);
-  const [sqlPreview, setSqlPreview] = useState<SqlDataPreview | null>(() => messageUiState?.sqlPreview ?? null);
-  const [sqlPreviewError, setSqlPreviewError] = useState(() => messageUiState?.sqlPreviewError ?? "");
-  const [isSqlPreviewLoading, setIsSqlPreviewLoading] = useState(false);
   const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const responseCopyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -166,17 +158,17 @@ const AIMessageComponent = ({
   }, [message.id, onMessageUiStateChange]);
 
   const handleCopy = useCallback(() => {
-    if (message.sql) {
-      navigator.clipboard.writeText(message.sql);
+    if (message.sql || message.queryText) {
+      navigator.clipboard.writeText(message.queryText || message.sql || "");
       setIsCopied(true);
-      toast.success('SQL copied to clipboard');
+      toast.success('Query copied to clipboard');
       if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
       copyResetTimeoutRef.current = setTimeout(() => {
         setIsCopied(false);
         copyResetTimeoutRef.current = null;
       }, 2000);
     }
-  }, [message.sql]);
+  }, [message.sql, message.queryText]);
 
   const handleCopyResponse = useCallback(() => {
     const response = [cleaned || message.content, message.explanation].filter(Boolean).join("\n\n");
@@ -191,25 +183,6 @@ const AIMessageComponent = ({
       responseCopyResetTimeoutRef.current = null;
     }, 2000);
   }, [cleaned, message.content, message.explanation]);
-
-  const handleShowSqlData = useCallback(async (sql: string) => {
-    setIsSqlPreviewLoading(true);
-    setSqlPreviewError("");
-    try {
-      const preview = await onShowSqlData(sql);
-      setSqlPreview(preview);
-      onMessageUiStateChange?.(message.id, { sqlPreview: preview, sqlPreviewError: "" });
-    } catch (error: any) {
-      setSqlPreview(null);
-      setSqlPreviewError(error.message || "Khong the hien thi du lieu.");
-      onMessageUiStateChange?.(message.id, {
-        sqlPreview: null,
-        sqlPreviewError: error.message || "Khong the hien thi du lieu.",
-      });
-    } finally {
-      setIsSqlPreviewLoading(false);
-    }
-  }, [onShowSqlData, onMessageUiStateChange, message.id]);
 
   return (
     <div className={cn(
@@ -306,43 +279,26 @@ const AIMessageComponent = ({
         {/* 3. Specialized Result Sections (SQL, Data, Analysis) */}
         {message.role === "assistant" && (
           <div className="w-full flex flex-col gap-2 mt-0.5">
-            {message.sql && (
+            {(message.sql || message.queryText) && (
               <SQLBlock
-                sql={message.sql}
+                sql={message.queryText || message.sql || ""}
+                queryLanguage={message.queryLanguage}
                 isDark={isDark}
                 onCopy={handleCopy}
                 copied={isCopied}
                 onExplain={onExplain}
                 onOptimize={onOptimize}
-                onShowData={handleShowSqlData}
-                isShowingData={isSqlPreviewLoading}
               />
-            )}
-
-            {sqlPreview && (
-              sqlPreview.data.length > 0 ? (
-                <DataTablePreview columns={sqlPreview.columns} data={sqlPreview.data} />
-              ) : (
-                <div className={cn(
-                  "rounded-lg border px-2.5 py-1.5 text-[11px] text-muted-foreground",
-                  isDark ? "border-white/10 bg-card/70" : "border-slate-200 bg-white"
-                )}>
-                  Query chạy thành công nhưng không trả về dòng dữ liệu nào.
-                  {sqlPreview.executionTime !== undefined && (
-                    <span className="ml-1 tabular-nums">({sqlPreview.executionTime}ms)</span>
-                  )}
-                </div>
-              )
-            )}
-
-            {sqlPreviewError && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[11px] text-destructive">
-                {sqlPreviewError}
-              </div>
             )}
 
             {message.columns && message.data && message.data.length > 0 && (
               <DataTablePreview columns={message.columns} data={message.data} />
+            )}
+
+            {message.data && message.data.length === 0 && (
+              <div className="rounded-lg border px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                Truy vấn thành công, không có dữ liệu phù hợp.
+              </div>
             )}
 
             {message.analysis && (

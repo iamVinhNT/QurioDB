@@ -56,7 +56,7 @@ const formatFencedSql = (sql: string) => {
 };
 
 const serializeMessageContent = (message: Message) => {
-  const parts = [message.content, message.sql ? formatFencedSql(message.sql) : "", message.analysis].filter(Boolean);
+  const parts = [message.content, message.queryText || (message.sql ? formatFencedSql(message.sql) : ""), message.analysis].filter(Boolean);
   return parts.join("\n\n").trim();
 };
 
@@ -417,6 +417,8 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
         confidence: message.confidence,
         columns: message.columns,
         data: message.data,
+        queryLanguage: message.queryLanguage,
+        queryText: message.queryText,
         suggestions: normalizeSuggestions(message.suggestions),
         citations: message.citations,
         retrievalTrace: message.retrievalTrace,
@@ -444,6 +446,8 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
           confidence: data.confidence,
           columns: data.columns,
           data: data.data,
+          queryLanguage: data.queryLanguage,
+          queryText: data.queryText,
           suggestions: normalizeSuggestions(data.suggestions),
           citations: data.citations,
           retrievalTrace: data.retrievalTrace,
@@ -671,7 +675,7 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
   const streamWithLifecycle = useCallback(async (
     input: string,
     streamRequest: (
-      onChunk: (chunk: string, event?: string) => void,
+      onChunk: (chunk: any, event?: string) => void,
       onHeaders: (headers: Headers) => void,
       signal: AbortSignal,
       ) => Promise<void>,
@@ -710,6 +714,7 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
 
     let responseContent = "";
     let sqlContent = "";
+    let query: Pick<Message, "queryLanguage" | "queryText" | "columns" | "data"> = {};
     let analysisContent = "";
     let confidenceScore: number | undefined;
     let citations: Message["citations"] = [];
@@ -774,6 +779,7 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
         return {
           ...base,
           ...parsed,
+          ...query,
           sql: parsed.sql || sqlContent.trim(),
           analysis: parsed.analysis || analysisContent.trim(),
           confidence: parsed.confidence ?? confidenceScore,
@@ -872,6 +878,14 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
             sqlContent += String(chunk || "");
             completeStreamSteps();
             lastStreamEvent = "sql";
+          } else if (event === "query") {
+            query = { ...query, queryLanguage: chunk.queryLanguage, queryText: chunk.queryText };
+            completeStreamSteps();
+            lastStreamEvent = "query";
+          } else if (event === "query_result") {
+            query = { ...query, columns: chunk.columns, data: chunk.data };
+            completeStreamSteps();
+            lastStreamEvent = "query_result";
           } else if (event === "analysis") {
             analysisContent += String(chunk || "");
             completeStreamSteps();
@@ -889,8 +903,12 @@ export function useAIChat(databaseId?: string, schema?: string, selectedModel?: 
             completeStreamSteps();
             lastStreamEvent = "warnings";
           } else if (event === "suggestions") {
-            suggestionsContent += String(chunk || "");
-            suggestions = parseSuggestionsContent(suggestionsContent);
+            if (Array.isArray(chunk)) {
+              suggestions = normalizeSuggestions(chunk);
+            } else {
+              suggestionsContent += String(chunk || "");
+              suggestions = parseSuggestionsContent(suggestionsContent);
+            }
             completeStreamSteps();
             lastStreamEvent = "suggestions";
           } else if (event !== "error") {

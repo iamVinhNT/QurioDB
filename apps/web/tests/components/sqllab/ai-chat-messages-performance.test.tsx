@@ -32,7 +32,6 @@ function makeMessages(count: number): Message[] {
 const noopCallbacks = {
   onExplain: vi.fn(),
   onOptimize: vi.fn(),
-  onShowSqlData: vi.fn(),
   onSuggestionClick: vi.fn(),
 };
 
@@ -149,7 +148,6 @@ describe("AIChatMessages long-conversation rendering", () => {
     const callbacks = {
       onExplain: vi.fn(),
       onOptimize: vi.fn(),
-      onShowSqlData: vi.fn(),
       onSuggestionClick: vi.fn(),
     };
 
@@ -262,7 +260,6 @@ describe("AIChatMessages long-conversation rendering", () => {
     const callbacks = {
       onExplain: vi.fn(),
       onOptimize: vi.fn(),
-      onShowSqlData: vi.fn(),
       onSuggestionClick: vi.fn(),
     };
 

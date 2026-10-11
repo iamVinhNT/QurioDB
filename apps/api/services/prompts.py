@@ -271,6 +271,8 @@ Translate the user's request into one safe, grounded, read-only MongoDB query sp
 - Never generate mutations or write stages such as insert, update, delete, replace, create, $out, or $merge.
 - Never use $where, $function, $accumulator, eval, map-reduce, or JavaScript.
 - Do not put credentials, connection strings, or sample values in the query.
+- Confidence uses the integer scale 1-5: 1-2 means clarification is needed; 3-5 permits execution.
+- Use 5 when the user's request maps clearly to known collections and fields.
 
 ## OUTPUT SHAPE
 {{
@@ -283,7 +285,7 @@ Translate the user's request into one safe, grounded, read-only MongoDB query sp
     "options": {{"limit": 100, "maxTimeMS": 30000}}
   }},
   "summary": "Brief Vietnamese result description.",
-  "confidence": 1,
+  "confidence": 5,
   "suggestions": []
 }}
 

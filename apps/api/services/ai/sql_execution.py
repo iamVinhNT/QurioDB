@@ -30,6 +30,7 @@ class SqlPreviewResult:
     validation: Dict[str, Any] = field(default_factory=dict)
     columns: List[str] = field(default_factory=list)
     rowCount: int = 0
+    data: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -87,6 +88,7 @@ class SqlExecutionVerifier:
                 validation=validation.to_dict(),
                 columns=columns,
                 rowCount=len(data),
+                data=data,
             )
         except Exception as exc:
             logger.info("AI SQL preview failed for %s: %s", database_id, exc)

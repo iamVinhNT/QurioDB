@@ -120,6 +120,7 @@ class AgentAIService(BaseAIService):
         user_id: Optional[str] = None,
         model_id: Optional[str] = None,
         conv_id: Optional[str] = None,
+        persist: bool = True,
     ) -> Dict[str, Any]:
         """Run the bounded MongoDB JSON-spec generation and repair loop."""
         safe_prompt = redact_mongo_sensitive_text(prompt)
@@ -239,6 +240,7 @@ class AgentAIService(BaseAIService):
                     db_id,
                     conv_id,
                     database_type="mongodb",
+                    persist=persist,
                 )
             if query_payload is None and agent_type == "success":
 
@@ -253,6 +255,7 @@ class AgentAIService(BaseAIService):
                     db_id,
                     conv_id,
                     database_type="mongodb",
+                    persist=persist,
                 )
 
 
@@ -300,6 +303,8 @@ class AgentAIService(BaseAIService):
                 safe_retrieval_trace,
                 safe_citations,
             )
+            if not persist:
+                return safe_response
             self._save_chat(
                 "user",
                 safe_prompt,
@@ -622,12 +627,15 @@ class AgentAIService(BaseAIService):
         db_id: str,
         conv_id: str,
         database_type: Optional[str] = None,
+        persist: bool = True,
     ) -> Dict:
         """Handles non-SQL responses (thinking, summaries)."""
         agent_res["confidence"] = _normalize_confidence(agent_res.get("confidence"))
         agent_res["type"] = "clarification" if agent_res["confidence"] <= 2 else "success"
         if agent_res["type"] == "clarification":
             agent_res["summary"] = "Tôi chưa chắc ý của bạn. Bạn có thể nói rõ hơn không?"
+        if not persist:
+            return agent_res
         self._save_chat(
             "user",
             prompt,

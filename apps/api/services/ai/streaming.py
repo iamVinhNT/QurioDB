@@ -13,6 +13,8 @@ STREAM_RESPONSE_PARTS = {
     "confidence": [],
     "message": [],
     "sql": [],
+    "query": [],
+    "query_result": [],
     "analysis": [],
     "citations": [],
     "retrieval_trace": [],
@@ -72,7 +74,7 @@ def append_stream_part(parts: Dict[str, List[Any]], event: str, chunk: Any) -> N
 def build_assistant_history_content(parts: Dict[str, List[str]]) -> str:
     """Serializes streamed semantic events without embedding UI tags in content."""
     payload = build_assistant_history_payload(parts)
-    if not payload["events"] and not payload["content"]:
+    if not payload["events"] and not payload["content"] and not payload.get("queryText") and "data" not in payload:
         return ""
     return json.dumps(payload, ensure_ascii=False)
 
@@ -114,7 +116,16 @@ def build_assistant_history_payload(parts: Dict[str, List[str]]) -> Dict[str, An
             payload["warnings"] = _parse_jsonish(content, [])
         elif event == "suggestions":
             payload["suggestions"] = _parse_suggestions(content)
-        payload["events"].append({"type": event, "content": content})
+        elif event == "query":
+            query = _parse_jsonish(content, {})
+            payload["queryLanguage"] = query.get("queryLanguage")
+            payload["queryText"] = query.get("queryText", "")
+        elif event == "query_result":
+            result = _parse_jsonish(content, {})
+            payload["columns"] = result.get("columns", [])
+            payload["data"] = result.get("data", [])
+        if event not in {"query", "query_result"}:
+            payload["events"].append({"type": event, "content": content})
 
     return payload
 
@@ -123,7 +134,7 @@ def _semantic_events(events: List[Tuple[str, Any]]) -> List[Tuple[str, Any]]:
     semantic_events: List[Tuple[str, Any]] = []
     for event, chunk in events:
         event_name = str(event or "message")
-        if event_name in {"citations", "retrieval_trace", "warnings", "suggestions"} and isinstance(chunk, (dict, list)):
+        if event_name in {"citations", "retrieval_trace", "warnings", "suggestions", "query", "query_result"} and isinstance(chunk, (dict, list)):
             semantic_events.append((event_name, chunk))
             continue
 

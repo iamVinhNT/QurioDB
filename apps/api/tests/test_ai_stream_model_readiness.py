@@ -180,7 +180,7 @@ def test_stream_task_assigned_compatible_model_does_not_use_auto_fallback(mocker
 
 def test_sql_preview_repair_invocation_reuses_selected_provider_and_model(mocker):
     preview = SimpleNamespace(ok=False, sql="SELECT * FROM customers", to_dict=lambda: {"error": "bad column"})
-    successful_preview = SimpleNamespace(ok=True, sql="SELECT id FROM customers", to_dict=lambda: {})
+    successful_preview = SimpleNamespace(ok=True, sql="SELECT id FROM customers", columns=["id"], data=[{"id": 1}], to_dict=lambda: {})
     stream_text = mocker.patch(
         "services.ai_service.langchain_runtime.stream_text",
         return_value=iter(["SELECT * FROM customers"]),

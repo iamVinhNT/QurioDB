@@ -118,6 +118,36 @@ describe("useAIChat stream status handling", () => {
     expect(result.current.conversationId).toBeNull();
   });
 
+  it.each([{ rows: [] }, { rows: [{ customer: "An", profile: { city: "Hanoi" } }] }])(
+    "keeps structured MongoDB query results through streaming and history restore: %j", async ({ rows }) => {
+      const queryText = 'db.orders.find({"status":"paid"})';
+      const columns = ["customer", "profile"];
+      vi.spyOn(aiApi, "streamChat").mockImplementation(async (_data, onChunk) => {
+        onChunk("Đơn hàng đã thanh toán.", "message");
+        onChunk({ queryLanguage: "mongodb", queryText }, "query");
+        onChunk({ columns, data: rows }, "query_result");
+        onChunk([{ label: "Tổng", prompt: "Tính tổng amount", intent: "other" }], "suggestions");
+      });
+      vi.spyOn(aiApi, "getConversationMessages").mockResolvedValue({
+        id: "conv-mongo", messages: [{ id: "saved", role: "assistant", content: "Đơn hàng",
+          events: [], queryLanguage: "mongodb", queryText, columns, data: rows }],
+      });
+      const { result } = renderHook(() => useAIChat("db-1", "analytics"));
+      await act(async () => { await result.current.handleSend("show paid orders"); });
+      expect(result.current.messages.at(-1)).toEqual(expect.objectContaining({
+        queryLanguage: "mongodb", queryText, columns, data: rows, isStreaming: false,
+      }));
+      expect(result.current.messages.at(-1)?.content).not.toContain("[object Object]");
+      expect(result.current.messages.at(-1)?.suggestions).toEqual([
+        { label: "Tổng", prompt: "Tính tổng amount", intent: "other" },
+      ]);
+      await act(async () => { await result.current.loadConversation("conv-mongo"); });
+      expect(result.current.messages.at(-1)).toEqual(expect.objectContaining({
+        queryLanguage: "mongodb", queryText, columns, data: rows,
+      }));
+    },
+  );
+
   it("keeps final streamed assistant content when chunks are frame-batched", async () => {
     vi.spyOn(aiApi, "getConversations").mockResolvedValue([]);
     vi.spyOn(aiApi, "streamChat").mockImplementation(async (_data, onChunk, onHeaders) => {

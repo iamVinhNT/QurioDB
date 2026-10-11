@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Copy, Check, Sparkles, FileSearch, Wand2, Table2, Loader2 } from "lucide-react";
+import { Copy, Check, Sparkles, FileSearch, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -15,8 +15,7 @@ interface SQLBlockProps {
   copied: boolean;
   onExplain: (sql: string) => void;
   onOptimize: (sql: string) => void;
-  onShowData: (sql: string) => void;
-  isShowingData?: boolean;
+  queryLanguage?: string;
 }
 
 export const SQLBlock = React.memo(({
@@ -26,8 +25,7 @@ export const SQLBlock = React.memo(({
   copied,
   onExplain,
   onOptimize,
-  onShowData,
-  isShowingData = false,
+  queryLanguage,
 }: SQLBlockProps) => {
   return (
     <div className={cn(
@@ -43,7 +41,7 @@ export const SQLBlock = React.memo(({
           <span className={cn(
             "text-[9px] font-black uppercase tracking-widest",
             isDark ? "text-slate-400" : "text-slate-500"
-          )}>Synthesized SQL</span>
+          )}>{queryLanguage === "mongodb" ? "MongoDB Query" : "Synthesized SQL"}</span>
         </div>
         <Button
           variant="ghost"
@@ -53,8 +51,8 @@ export const SQLBlock = React.memo(({
             isDark ? "text-slate-500 hover:text-white hover:bg-white/10" : "text-slate-400 hover:text-slate-900 hover:bg-slate-200"
           )}
           onClick={onCopy}
-          title={copied ? "Copied" : "Copy SQL"}
-          aria-label={copied ? "Copied SQL" : "Copy SQL"}
+          title={copied ? "Copied" : "Copy query"}
+          aria-label={copied ? "Copied query" : "Copy query"}
         >
           {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
         </Button>
@@ -78,16 +76,7 @@ export const SQLBlock = React.memo(({
         "p-1.5 flex flex-col gap-1.5",
         isDark ? "bg-slate-900/40" : "bg-slate-50/50"
       )}>
-        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-          <Button
-            variant="outline"
-            className="h-7 rounded-lg px-2 text-[10px] font-bold"
-            onClick={() => onShowData(sql)}
-            disabled={isShowingData}
-          >
-            {isShowingData ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Table2 className="h-3.5 w-3.5 mr-1.5" />}
-            Hiển thị dữ liệu
-          </Button>
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
           <Button
             variant="ghost"
             className="h-7 text-[11px] font-bold uppercase tracking-widest transition-all text-slate-600 dark:text-slate-300 hover:text-primary hover:bg-primary/5 rounded-lg"

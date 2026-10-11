@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Activity } from "lucide-react";
 import { toast } from "sonner";
 
-import { aiApi, databaseApi } from "@/lib/api-client";
+import { aiApi } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAIChat } from "../hooks/useAIChat";
@@ -280,45 +280,6 @@ function AIAssistantContent({
     }
   }, [handleActionStream, selectedDatabaseId, selectedModel, selectedSchema]);
 
-  const handleShowSqlData = useCallback(async (s: string) => {
-    if (!selectedDatabaseId) {
-      throw new Error("Chọn database trước khi hiển thị dữ liệu.");
-    }
-
-    const previewLimit = lab.queryLimit || 500;
-    const validation = await aiApi.validateSQL({
-      sql: s,
-      databaseId: selectedDatabaseId,
-      dialect: selectedDatabaseType,
-      maxPreviewRows: previewLimit,
-    });
-
-    if (!validation.isAllowed) {
-      throw new Error(validation.blockedReason || "SQL không vượt qua kiểm tra an toàn.");
-    }
-
-    if (validation.limitApplied) {
-      toast.info("Đã tự thêm LIMIT để tránh trả quá nhiều dòng.");
-    }
-
-    const result = await databaseApi.execute(
-      selectedDatabaseId,
-      validation.sanitizedSql,
-      false,
-      previewLimit,
-    );
-
-    if (result.error) {
-      throw new Error(result.error);
-    }
-
-    return {
-      columns: Array.isArray(result.columns) ? result.columns : [],
-      data: Array.isArray(result.data) ? result.data : [],
-      executionTime: result.executionTime,
-    };
-  }, [lab.queryLimit, selectedDatabaseId, selectedDatabaseType]);
-
   const refreshDiagnostics = useCallback(async () => {
     setIsDiagnosticsLoading(true);
     try {
@@ -379,9 +340,8 @@ function AIAssistantContent({
   const AIActions = React.useMemo(() => ({
     onExplain: handleExplain,
     onOptimize: handleOptimize,
-    onShowSqlData: handleShowSqlData,
     onSuggestionClick: handleSuggestionClick
-  }), [handleExplain, handleOptimize, handleShowSqlData, handleSuggestionClick]);
+  }), [handleExplain, handleOptimize, handleSuggestionClick]);
 
   if (!active) return null;
 

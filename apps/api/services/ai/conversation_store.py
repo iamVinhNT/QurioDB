@@ -202,6 +202,7 @@ class AIConversationStore:
             "warnings": payload.get("warnings") or [],
             "suggestions": payload.get("suggestions") or [],
             "events": payload.get("events") or [],
+            **{key: payload[key] for key in ("queryLanguage", "queryText", "columns", "data") if key in payload},
         }
 
     def _history_context_content(self, message: AIChatMessage) -> str:
@@ -211,6 +212,7 @@ class AIConversationStore:
         parts = [
             payload.get("content") or "",
             f"SQL:\n{payload.get('sql')}" if payload.get("sql") else "",
+            f"Query:\n{payload.get('queryText')}" if payload.get("queryText") else "",
             f"Analysis:\n{payload.get('analysis')}" if payload.get("analysis") else "",
         ]
         return "\n\n".join(part for part in parts if part).strip()

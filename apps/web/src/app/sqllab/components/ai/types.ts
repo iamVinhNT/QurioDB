@@ -34,6 +34,8 @@ export interface Message {
   content: string;
   action?: "explain" | "optimize";
   sql?: string;
+  queryLanguage?: string;
+  queryText?: string;
   explanation?: string;
   thought?: string;
   analysis?: string;
@@ -47,12 +49,6 @@ export interface Message {
   warnings?: string[];
   steps?: AIStep[];
   isStreaming?: boolean;
-}
-
-export interface SqlDataPreview {
-  columns: string[];
-  data: any[];
-  executionTime?: number;
 }
 
 export interface AIProviderStatus {
