@@ -43,7 +43,7 @@ export function AISettings() {
 
   // State for Provider Config
   const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState("Google");
+  const [provider, setProvider] = useState<string>();
   const [baseUrl, setBaseUrl] = useState("");
 
   // State for Add Model Form
@@ -102,7 +102,11 @@ export function AISettings() {
 
   const handleSaveConfig = useCallback(async () => {
     if (!apiKey) return; // Don't save if empty (or show error if triggered manually)
-    await saveConfigMutation.mutateAsync({ apiKey, provider, baseUrl });
+    if (provider?.toLowerCase() === "custom" && !baseUrl.trim()) {
+      toast.error("Custom Provider requires a Base URL.");
+      return;
+    }
+    await saveConfigMutation.mutateAsync({ apiKey, provider: provider || "Google", baseUrl });
   }, [apiKey, provider, baseUrl, saveConfigMutation]);
 
   const handleReset = useCallback(() => {
@@ -193,7 +197,7 @@ export function AISettings() {
   const models = (modelsQuery.data as AIModel[]) || [];
   const taskCatalog = (taskCatalogQuery.data as AITaskCatalogItem[]) || [];
   const taskAssignments = (taskAssignmentsQuery.data as AITaskAssignment[]) || [];
-  const providerHealth = statusQuery.data?.providers?.[provider.toLowerCase()];
+  const providerHealth = statusQuery.data?.providers?.[provider?.toLowerCase() || "google"];
   const hasProviderKey = providerHealth?.hasApiKey ?? Boolean(apiKey && apiKey !== "********");
   const activeModels = models.filter((model) => model.isActive).length;
 
@@ -213,7 +217,7 @@ export function AISettings() {
           <ProviderConfig
             apiKey={apiKey}
             setApiKey={setApiKey}
-            provider={provider}
+            provider={provider || "Google"}
             setProvider={setProvider}
             baseUrl={baseUrl}
             setBaseUrl={setBaseUrl}

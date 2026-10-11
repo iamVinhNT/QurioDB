@@ -6,6 +6,7 @@ provider selection, and provider-safe AI service fallback behavior.
 """
 
 import json
+import urllib.error
 
 import pytest
 from sqlalchemy import create_engine
@@ -49,7 +50,7 @@ def test_infer_provider_from_model_id():
 @pytest.mark.parametrize(
     ("provider", "base_url"),
     [
-        ("9router", "http://127.0.0.1:20128/v1/"),
+        ("custom", "http://gateway.test/v1/"),
         ("qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/"),
     ],
 )
@@ -88,6 +89,24 @@ def test_openai_is_inventory_compatible():
     assert subject.is_openai_compatible_provider("Anthropic") is False
 
 
+@pytest.mark.parametrize("base_url", ["file:///etc/passwd", "http:///missing-host", "not a url"])
+def test_list_available_models_rejects_unsafe_base_url_before_request(monkeypatch, base_url):
+    subject = runtime.LangChainRuntime()
+    calls = []
+    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "secret")
+    monkeypatch.setattr(runtime, "resolve_base_url", lambda provider, user_id=None: base_url)
+    def unexpected_request(*args, **kwargs):
+        calls.append(args)
+        raise urllib.error.URLError("request should not happen")
+
+    monkeypatch.setattr(runtime, "urlopen", unexpected_request)
+
+    with pytest.raises(RuntimeError, match="Invalid Base URL"):
+        subject.list_available_models("custom", "user-1")
+
+    assert calls == []
+
+
 def test_model_inventory_cache_expires_after_sixty_seconds(monkeypatch):
     subject = runtime.LangChainRuntime()
     now = [100.0]
@@ -101,11 +120,11 @@ def test_model_inventory_cache_expires_after_sixty_seconds(monkeypatch):
         lambda request, timeout: calls.append(request.full_url) or FakeHTTPResponse({"data": [{"id": "model-a"}]}),
     )
 
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     now[0] = 159.9
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     now[0] = 160.0
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     assert calls == ["http://gateway.test/v1/models", "http://gateway.test/v1/models"]
 
 
@@ -125,12 +144,12 @@ def test_model_inventory_ttl_starts_after_response_parsing(monkeypatch):
 
     monkeypatch.setattr(runtime, "urlopen", fake_urlopen)
 
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     now[0] = 189.9
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     assert calls == ["http://gateway.test/v1/models"]
     now[0] = 190.0
-    assert subject.list_available_models("9router", "user-1") == ["model-a"]
+    assert subject.list_available_models("custom", "user-1") == ["model-a"]
     assert calls == ["http://gateway.test/v1/models", "http://gateway.test/v1/models"]
 
 
@@ -147,11 +166,11 @@ def test_model_inventory_cache_isolated_by_user_provider_and_base_url(monkeypatc
 
     monkeypatch.setattr(runtime, "urlopen", fake_urlopen)
 
-    subject.list_available_models("9 Router", "user-1")
-    subject.list_available_models("9router", "user-1")
-    subject.list_available_models("9router", "user-2")
+    subject.list_available_models("Custom", "user-1")
+    subject.list_available_models("custom", "user-1")
+    subject.list_available_models("custom", "user-2")
     current_base_url[0] = "http://other-gateway.test/v1"
-    subject.list_available_models("9router", "user-1")
+    subject.list_available_models("custom", "user-1")
 
     assert calls == [
         "http://gateway.test/v1/models",
@@ -174,9 +193,9 @@ def test_empty_model_inventory_is_not_cached(monkeypatch):
 
     monkeypatch.setattr(runtime, "urlopen", fake_urlopen)
     with pytest.raises(RuntimeError, match="no usable models"):
-        subject.list_available_models("9router", "user-1")
+        subject.list_available_models("custom", "user-1")
     with pytest.raises(RuntimeError, match="no usable models"):
-        subject.list_available_models("9router", "user-1")
+        subject.list_available_models("custom", "user-1")
     assert calls == ["http://gateway.test/v1/models", "http://gateway.test/v1/models"]
 
 
@@ -192,9 +211,9 @@ def test_failed_model_inventory_is_not_cached(monkeypatch):
 
     monkeypatch.setattr(runtime, "urlopen", fail_urlopen)
     with pytest.raises(RuntimeError, match="inventory unavailable"):
-        subject.list_available_models("9router", "user-1")
+        subject.list_available_models("custom", "user-1")
     with pytest.raises(RuntimeError, match="inventory unavailable"):
-        subject.list_available_models("9router", "user-1")
+        subject.list_available_models("custom", "user-1")
     assert calls == ["http://gateway.test/v1/models", "http://gateway.test/v1/models"]
 
 
@@ -211,7 +230,7 @@ def test_select_auto_model_stops_on_first_success_within_three_attempts(monkeypa
 
     monkeypatch.setattr(subject, "_probe_model_access", probe)
 
-    assert subject.select_auto_model("9router", "user-1") == {"provider": "9router", "model": "model-b"}
+    assert subject.select_auto_model("custom", "user-1") == {"provider": "custom", "model": "model-b"}
     assert probes == ["model-a", "model-b"]
 
 
@@ -233,122 +252,61 @@ def test_select_auto_model_limits_failures_to_three_unique_models(monkeypatch):
     monkeypatch.setattr(subject, "_probe_model_access", fail_probe)
 
     with pytest.raises(RuntimeError) as error:
-        subject.select_auto_model("9router", "user-1")
+        subject.select_auto_model("custom", "user-1")
 
     assert probes == ["model-a", "model-b", "model-c"]
-    assert str(error.value).startswith("Auto model selection failed for provider 9router after 3 attempts:")
+    assert str(error.value).startswith("Auto model selection failed for provider custom after 3 attempts:")
     assert "never-expose-this-key" not in str(error.value)
 
 
-def test_select_auto_model_uses_default_once_when_inventory_fails(monkeypatch):
+def test_builtin_auto_model_uses_default_when_inventory_fails(monkeypatch):
     subject = runtime.LangChainRuntime()
     probes = []
-    monkeypatch.setattr(subject, "list_available_models", lambda provider, user_id=None: (_ for _ in ()).throw(RuntimeError("404 models")))
-    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "secret")
-    monkeypatch.setattr(subject, "_probe_model_access", lambda model_id, user_id, provider: probes.append(model_id))
-
-    assert subject.select_auto_model("9router", "user-1") == {
-        "provider": "9router",
-        "model": "cc/claude-sonnet-4.5",
-    }
-    assert probes == ["cc/claude-sonnet-4.5"]
-
-
-def test_select_auto_model_sanitizes_inventory_and_default_failure(monkeypatch):
-    subject = runtime.LangChainRuntime()
-    probes = []
-    monkeypatch.setattr(subject, "list_available_models", lambda provider, user_id=None: (_ for _ in ()).throw(RuntimeError("404 models")))
-    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "never-expose-this-key")
-
-    def fail_probe(model_id, user_id, provider):
-        probes.append(model_id)
-        raise RuntimeError(
-            "Error code: 404 - {'error': {'message': 'credential never-expose-this-key rejected'}}"
-        )
-
-    monkeypatch.setattr(subject, "_probe_model_access", fail_probe)
-
-    with pytest.raises(RuntimeError) as error:
-        subject.select_auto_model("9router", "user-1")
-
-    message = str(error.value)
-    assert message.startswith("Auto model inventory failed for provider 9router:")
-    assert "default model preflight failed:" in message
-    assert "never-expose-this-key" not in message
-    assert probes == ["cc/claude-sonnet-4.5"]
-
-
-@pytest.mark.parametrize(
-    "inventory_response",
-    [
-        RuntimeError("inventory unavailable"),
-        {"unexpected": []},
-        {"data": []},
-    ],
-)
-def test_select_auto_model_uses_default_once_for_inventory_compatibility_fallback(monkeypatch, inventory_response):
-    subject = runtime.LangChainRuntime()
-    probes = []
-    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "secret-value")
-    monkeypatch.setattr(runtime, "resolve_base_url", lambda provider, user_id=None: "http://gateway.test/v1")
-
-    def fake_urlopen(request, timeout):
-        if isinstance(inventory_response, Exception):
-            raise inventory_response
-        return FakeHTTPResponse(inventory_response)
-
-    monkeypatch.setattr(runtime, "urlopen", fake_urlopen)
     monkeypatch.setattr(
-        subject,
-        "_probe_model_access",
-        lambda model_id, user_id, provider: probes.append((model_id, provider)),
+        subject, "list_available_models",
+        lambda provider, user_id=None: (_ for _ in ()).throw(RuntimeError("inventory unavailable")),
+    )
+    monkeypatch.setattr(
+        subject, "_probe_model_access",
+        lambda model_id, user_id, provider: probes.append((model_id, user_id, provider)),
     )
 
-    assert subject.select_auto_model("9router", "user-1") == {
-        "provider": "9router",
-        "model": "cc/claude-sonnet-4.5",
-    }
-    assert probes == [("cc/claude-sonnet-4.5", "9router")]
+    assert subject.select_auto_model("openai", "user-1") == {"provider": "openai", "model": "gpt-4o-mini"}
+    assert probes == [("gpt-4o-mini", "user-1", "openai")]
 
 
-@pytest.mark.parametrize(
-    "inventory_response",
-    [
-        RuntimeError("inventory unavailable: secret-value"),
-        {"unexpected": [{"body": "upstream-secret-body"}]},
-        {"data": []},
-    ],
-)
-def test_select_auto_model_reports_distinct_redacted_inventory_and_default_failures(
-    monkeypatch, inventory_response
-):
+def test_builtin_auto_model_reports_inventory_and_default_failures_without_secrets(monkeypatch):
     subject = runtime.LangChainRuntime()
-    probes = []
     monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "secret-value")
-    monkeypatch.setattr(runtime, "resolve_base_url", lambda provider, user_id=None: "http://gateway.test/v1")
-
-    def fake_urlopen(request, timeout):
-        if isinstance(inventory_response, Exception):
-            raise inventory_response
-        return FakeHTTPResponse(inventory_response)
-
-    monkeypatch.setattr(runtime, "urlopen", fake_urlopen)
-
-    def fail_probe(model_id, user_id, provider):
-        probes.append((model_id, provider))
-        raise RuntimeError("default preflight failed: secret-value {'upstream-secret-body': true}")
-
-    monkeypatch.setattr(subject, "_probe_model_access", fail_probe)
+    monkeypatch.setattr(
+        subject, "list_available_models",
+        lambda provider, user_id=None: (_ for _ in ()).throw(RuntimeError("inventory unavailable: secret-value")),
+    )
+    monkeypatch.setattr(
+        subject, "_probe_model_access",
+        lambda model_id, user_id, provider: (_ for _ in ()).throw(RuntimeError("model rejected: secret-value")),
+    )
 
     with pytest.raises(RuntimeError) as error:
-        subject.select_auto_model("9router", "user-1")
+        subject.select_auto_model("openai", "user-1")
 
-    message = str(error.value)
-    assert message.startswith("Auto model inventory failed for provider 9router:")
-    assert "default model preflight failed:" in message
-    assert "secret-value" not in message
-    assert "upstream-secret-body" not in message
-    assert probes == [("cc/claude-sonnet-4.5", "9router")]
+    assert "inventory unavailable" in str(error.value)
+    assert "default model preflight failed" in str(error.value)
+    assert "secret-value" not in str(error.value)
+
+
+def test_custom_auto_model_reports_inventory_failure_without_guessing_model(monkeypatch):
+    subject = runtime.LangChainRuntime()
+    monkeypatch.setattr(
+        subject, "list_available_models",
+        lambda provider, user_id=None: (_ for _ in ()).throw(RuntimeError("inventory unavailable: secret-value")),
+    )
+    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "secret-value")
+
+    with pytest.raises(RuntimeError, match="Custom Provider model inventory failed") as error:
+        subject.select_auto_model("custom", "user-1")
+
+    assert "secret-value" not in str(error.value)
 
 
 def test_build_model_for_supported_providers_uses_db_keys(monkeypatch):
@@ -365,7 +323,7 @@ def test_build_model_for_supported_providers_uses_db_keys(monkeypatch):
         monkeypatch.delenv(env_name, raising=False)
 
     def read_provider_config(provider, user_id=None):
-        return {"api_key": f"test-{provider}", "provider": provider}
+        return {"api_key": f"test-{provider}", "provider": provider, "base_url": "http://gateway.test/v1"}
 
     monkeypatch.setattr(runtime, "_read_provider_ai_config", read_provider_config)
 
@@ -375,7 +333,7 @@ def test_build_model_for_supported_providers_uses_db_keys(monkeypatch):
         ("anthropic", "claude-3-5-haiku-latest", "ChatAnthropic"),
         ("qwen", "qwen-plus", "ChatOpenAI"),
         ("deepseek", "deepseek-chat", "ChatOpenAI"),
-        ("9router", "cc/claude-sonnet-4.5", "ChatOpenAI"),
+        ("custom", "custom-model", "ChatOpenAI"),
     ]
 
     for provider, model_id, class_name in cases:
@@ -383,17 +341,18 @@ def test_build_model_for_supported_providers_uses_db_keys(monkeypatch):
         assert model.__class__.__name__ == class_name
 
 
-def test_build_model_for_9router_uses_local_openai_compatible_base_url(monkeypatch):
-    monkeypatch.delenv("_9ROUTER_BASE_URL", raising=False)
+def test_build_model_for_custom_requires_configured_base_url(monkeypatch):
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
     monkeypatch.setattr(
         runtime,
         "_read_provider_ai_config",
-        lambda provider, user_id=None: {"api_key": "test-9router", "provider": provider, "base_url": None},
+        lambda provider, user_id=None: {"api_key": "test-key", "provider": provider, "base_url": None},
     )
 
-    model = langchain_runtime.build_model(model_id="cc/claude-opus-4-7", provider="9router")
-    assert model.__class__.__name__ == "ChatOpenAI"
-    assert str(model.openai_api_base) == "http://127.0.0.1:20128/v1"
+    with pytest.raises(RuntimeError, match="Custom Provider requires a Base URL"):
+        langchain_runtime.build_model(model_id="custom-model", provider="custom")
+
+
 
 
 def test_build_model_for_openai_uses_custom_resolved_base_url(monkeypatch):
@@ -449,36 +408,56 @@ def test_openai_auto_inventory_and_generation_share_override_or_native_default(m
 
 
 def test_resolve_base_url_prefers_db_override(monkeypatch):
-    monkeypatch.setenv("_9ROUTER_BASE_URL", "http://127.0.0.1:9999/v1")
+    monkeypatch.setenv("CUSTOM_BASE_URL", "http://gateway-env.test/v1")
     monkeypatch.setattr(
         runtime,
         "_read_provider_ai_config",
-        lambda provider, user_id=None: {"base_url": "http://192.168.1.5:20128/v1"},
+        lambda provider, user_id=None: {"base_url": "http://gateway-db.test/v1"},
     )
 
-    assert resolve_base_url("9router") == "http://192.168.1.5:20128/v1"
+    assert resolve_base_url("custom") == "http://gateway-db.test/v1"
 
 
-def test_resolve_base_url_falls_back_to_env_then_default(monkeypatch):
+def test_resolve_custom_base_url_falls_back_to_env_without_vendor_default(monkeypatch):
     monkeypatch.setattr(runtime, "_read_provider_ai_config", lambda provider, user_id=None: {"base_url": None})
 
-    monkeypatch.setenv("_9ROUTER_BASE_URL", "http://127.0.0.1:7777/v1")
-    assert resolve_base_url("9router") == "http://127.0.0.1:7777/v1"
+    monkeypatch.setenv("CUSTOM_BASE_URL", "http://gateway-env.test/v1")
+    assert resolve_base_url("custom") == "http://gateway-env.test/v1"
 
-    monkeypatch.delenv("_9ROUTER_BASE_URL", raising=False)
-    assert resolve_base_url("9router") == "http://127.0.0.1:20128/v1"
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
+    assert resolve_base_url("custom") is None
 
 
-def test_build_model_for_9router_honors_db_base_url_override(monkeypatch):
-    monkeypatch.delenv("_9ROUTER_BASE_URL", raising=False)
+def test_build_model_for_custom_honors_db_base_url(monkeypatch):
     monkeypatch.setattr(
         runtime,
         "_read_provider_ai_config",
-        lambda provider, user_id=None: {"api_key": "test-9router", "provider": provider, "base_url": "http://127.0.0.1:9999/v1"},
+        lambda provider, user_id=None: {"api_key": "test-key", "provider": provider, "base_url": "http://gateway-db.test/v1"},
     )
 
-    model = langchain_runtime.build_model(model_id="cc/claude-opus-4-7", provider="9router")
-    assert str(model.openai_api_base) == "http://127.0.0.1:9999/v1"
+    model = langchain_runtime.build_model(model_id="custom-model", provider="custom")
+    assert str(model.openai_api_base) == "http://gateway-db.test/v1"
+
+
+@pytest.mark.parametrize("base_url", ["file:///etc/passwd", "http:///missing-host", "http://gateway.test:bad/v1"])
+def test_build_model_rejects_unsafe_resolved_base_url(monkeypatch, base_url):
+    monkeypatch.setattr(runtime, "get_ai_api_key", lambda user_id=None, provider=None: "test-key")
+    monkeypatch.setattr(runtime, "resolve_base_url", lambda provider, user_id=None: base_url)
+
+    with pytest.raises(RuntimeError, match="Invalid Base URL"):
+        langchain_runtime.build_model(model_id="custom-model", provider="custom")
+
+
+def test_save_config_validates_truthy_base_url_for_builtin_provider(monkeypatch):
+    from fastapi import HTTPException
+    from routes import ai_config
+
+    monkeypatch.setattr(ai_config, "SessionLocal", lambda: (_ for _ in ()).throw(AssertionError("must reject before persistence")))
+    with pytest.raises(HTTPException, match="valid HTTP"):
+        ai_config.save_config(
+            ai_config.SaveConfigRequest(apiKey="secret", provider="OpenAI", baseUrl="file:///etc/passwd"),
+            {"userId": "user-1"},
+        )
 
 
 def test_get_ai_api_key_does_not_require_env(monkeypatch):
@@ -497,7 +476,7 @@ def test_get_ai_api_key_does_not_require_env(monkeypatch):
 def test_status_reports_supported_provider_registry():
     status = langchain_runtime.status()
 
-    assert status["supportedProviders"] == ["openai", "google", "anthropic", "qwen", "deepseek", "9router"]
+    assert status["supportedProviders"] == ["openai", "google", "anthropic", "qwen", "deepseek", "custom"]
     assert status["defaultModels"]["openai"] == "gpt-4o-mini"
     assert status["defaultModels"]["google"] == "gemini-2.5-flash"
 
@@ -639,7 +618,7 @@ def test_user_ai_config_migration_adds_base_url_column():
         connection.exec_driver_sql(
             """
             INSERT INTO user_ai_configs (id, "userId", "apiKey", provider)
-            VALUES ('config-1', 'user-1', 'encrypted-9router', '9router')
+            VALUES ('config-1', 'user-1', 'encrypted-custom', 'Custom')
             """
         )
 
@@ -652,7 +631,7 @@ def test_user_ai_config_migration_adds_base_url_column():
         ]
         connection.exec_driver_sql(
             """
-            UPDATE user_ai_configs SET "baseUrl" = 'http://127.0.0.1:20128/v1' WHERE id = 'config-1'
+            UPDATE user_ai_configs SET "baseUrl" = 'http://gateway.test/v1' WHERE id = 'config-1'
             """
         )
         base_url = connection.exec_driver_sql(
@@ -660,7 +639,149 @@ def test_user_ai_config_migration_adds_base_url_column():
         ).fetchone()[0]
 
     assert "baseUrl" in columns
-    assert base_url == "http://127.0.0.1:20128/v1"
+    assert base_url == "http://gateway.test/v1"
+
+
+def test_legacy_gateway_migration_preserves_key_url_and_registered_models():
+    from models import UserAIConfig
+    from services.startup import migrate_legacy_gateway_provider
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    with session_factory() as session:
+        session.add(UserAIConfig(id="legacy", userId="user-1", provider="9router", apiKey="encrypted-key", baseUrl="http://my-gateway.test/v1"))
+        session.add(AIModel(id="model", name="Legacy model", modelId="gateway/model", provider="9router"))
+        session.commit()
+
+    migrate_legacy_gateway_provider(engine)
+    migrate_legacy_gateway_provider(engine)
+
+    with session_factory() as session:
+        config = session.query(UserAIConfig).filter_by(id="legacy").one()
+        model = session.query(AIModel).filter_by(id="model").one()
+        assert (config.provider, config.apiKey, config.baseUrl) == (
+            "Custom", "encrypted-key", "http://my-gateway.test/v1",
+        )
+        assert model.provider == "Custom"
+
+    with session_factory() as session:
+        session.add(UserAIConfig(id="missing-url", userId="user-2", provider="9router", apiKey="another-key"))
+        session.commit()
+    migrate_legacy_gateway_provider(engine)
+    with session_factory() as session:
+        assert session.query(UserAIConfig).filter_by(id="missing-url").one().baseUrl is None
+
+
+def test_legacy_gateway_migration_prefers_existing_custom_config():
+    from models import UserAIConfig
+    from services.startup import migrate_legacy_gateway_provider
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    with session_factory() as session:
+        session.add(UserAIConfig(id="legacy", userId="user-1", provider="9router", apiKey="old-key"))
+        session.add(UserAIConfig(id="custom", userId="user-1", provider="Custom", apiKey="current-key", baseUrl="http://custom.test/v1"))
+        session.commit()
+
+    migrate_legacy_gateway_provider(engine)
+
+    with session_factory() as session:
+        configs = session.query(UserAIConfig).filter_by(userId="user-1").all()
+        assert [(config.provider, config.apiKey, config.baseUrl) for config in configs] == [
+            ("Custom", "current-key", "http://custom.test/v1"),
+        ]
+
+
+@pytest.mark.parametrize("base_url", ["file:///etc/passwd", "http:///missing-host", "not a url"])
+def test_custom_config_rejects_invalid_base_url_before_persisting(monkeypatch, base_url):
+    import routes.ai_config as ai_config
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(ai_config, "SessionLocal", session_factory)
+
+    with pytest.raises(ai_config.HTTPException) as error:
+        ai_config.save_config(
+            ai_config.SaveConfigRequest(apiKey="secret", provider="Custom", baseUrl=base_url),
+            {"userId": "user-1"},
+        )
+
+    assert error.value.status_code == 400
+    assert "secret" not in error.value.detail
+    with session_factory() as session:
+        assert session.query(runtime.UserAIConfig).count() == 0
+
+
+@pytest.mark.parametrize("base_url", ["http://localhost:8080/v1", "https://192.168.1.2/v1"])
+def test_custom_config_accepts_local_http_base_url(monkeypatch, base_url):
+    import routes.ai_config as ai_config
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(ai_config, "SessionLocal", session_factory)
+
+    ai_config.save_config(
+        ai_config.SaveConfigRequest(apiKey="secret", provider="Custom", baseUrl=base_url),
+        {"userId": "user-1"},
+    )
+
+    with session_factory() as session:
+        config = session.query(runtime.UserAIConfig).one()
+        assert config.baseUrl == base_url
+        assert "secret" not in config.baseUrl
+
+
+def test_custom_config_requires_base_url_before_persisting(monkeypatch):
+    import routes.ai_config as ai_config
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(ai_config, "SessionLocal", session_factory)
+
+    with pytest.raises(ai_config.HTTPException) as error:
+        ai_config.save_config(ai_config.SaveConfigRequest(apiKey="secret", provider="Custom"), {"userId": "user-1"})
+
+    assert error.value.status_code == 400
+    with session_factory() as session:
+        assert session.query(runtime.UserAIConfig).count() == 0
+
+
+def test_latest_saved_provider_is_preferred_by_ui_and_runtime(monkeypatch):
+    import datetime
+    import routes.ai_config as ai_config
+    from models import UserAIConfig
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(ai_config, "SessionLocal", session_factory)
+    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
+    user = {"userId": "user-1"}
+
+    ai_config.save_config(ai_config.SaveConfigRequest(apiKey="google-key", provider="Google"), user)
+    ai_config.save_config(ai_config.SaveConfigRequest(
+        apiKey="custom-key", provider="Custom", baseUrl="http://gateway.test/v1",
+    ), user)
+    with session_factory() as session:
+        for config in session.query(UserAIConfig).all():
+            config.id = "a-google" if config.provider == "Google" else "z-custom"
+            config.changed_on = datetime.datetime(2025, 1, 1) if config.provider == "Google" else datetime.datetime(2024, 1, 1)
+        session.commit()
+
+    selected = ai_config.get_config(provider=None, current_user=user)
+    assert (selected["provider"], selected["baseUrl"]) == ("Google", "")
+    assert runtime.langchain_runtime.resolve_provider(user_id="user-1") == "google"
+    ai_config.save_config(ai_config.SaveConfigRequest(
+        apiKey="********", provider="Custom", baseUrl="http://gateway.test/v2",
+    ), user)
+    selected = ai_config.get_config(provider=None, current_user=user)
+    assert (selected["provider"], selected["baseUrl"]) == ("Custom", "http://gateway.test/v2")
+    assert runtime.langchain_runtime.resolve_provider(user_id="user-1") == "custom"
 
 
 def _make_reclaim_session():
@@ -680,7 +801,7 @@ def test_reclaim_repoints_legacy_desktop_admin_configs():
     from services.startup import reclaim_desktop_admin_owned_rows
 
     session, User, UserAIConfig = _make_reclaim_session()
-    session.add(UserAIConfig(id="c1", userId="desktop-admin-id", apiKey="enc", provider="9router"))
+    session.add(UserAIConfig(id="c1", userId="desktop-admin-id", apiKey="enc", provider="custom"))
     session.commit()
 
     reclaim_desktop_admin_owned_rows(session, User)
@@ -694,13 +815,13 @@ def test_reclaim_drops_legacy_duplicate_when_admin_already_configured_provider()
     from services.startup import reclaim_desktop_admin_owned_rows
 
     session, User, UserAIConfig = _make_reclaim_session()
-    session.add(UserAIConfig(id="real", userId="real-admin", apiKey="enc-real", provider="9router"))
-    session.add(UserAIConfig(id="legacy", userId="desktop-admin-id", apiKey="enc-old", provider="9router"))
+    session.add(UserAIConfig(id="real", userId="real-admin", apiKey="enc-real", provider="custom"))
+    session.add(UserAIConfig(id="legacy", userId="desktop-admin-id", apiKey="enc-old", provider="custom"))
     session.commit()
 
     reclaim_desktop_admin_owned_rows(session, User)
     session.commit()
 
-    remaining = session.query(UserAIConfig).filter(UserAIConfig.provider == "9router").all()
+    remaining = session.query(UserAIConfig).filter(UserAIConfig.provider == "custom").all()
     assert [c.id for c in remaining] == ["real"]
     assert session.query(UserAIConfig).filter(UserAIConfig.userId == "desktop-admin-id").count() == 0

@@ -105,7 +105,7 @@ export function AddModelDialog({
                   <SelectItem value="Anthropic" className="text-base py-3 px-4">Anthropic Claude</SelectItem>
                   <SelectItem value="Qwen" className="text-base py-3 px-4">Qwen</SelectItem>
                   <SelectItem value="DeepSeek" className="text-base py-3 px-4">DeepSeek</SelectItem>
-                  <SelectItem value="9router" className="text-base py-3 px-4">9router (OpenAI-compatible)</SelectItem>
+                  <SelectItem value="Custom" className="text-base py-3 px-4">Custom Provider (OpenAI-compatible)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

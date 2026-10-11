@@ -13,6 +13,7 @@ import random
 import re
 import time
 from threading import Lock
+from urllib.parse import urlsplit
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.request import Request, urlopen
 
@@ -66,9 +67,6 @@ DEFAULT_LANGSMITH_PROJECT = "QurioDB AI Assistant"
 OPENAI_COMPATIBLE_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
     "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    # 9router is a local OpenAI-compatible gateway (https://github.com/decolua/9router)
-    # exposing one /v1 endpoint that fans out to 40+ upstream providers.
-    "9router": "http://127.0.0.1:20128/v1",
 }
 DEFAULT_PROVIDER_MODELS = {
     "openai": "gpt-4o-mini",
@@ -76,7 +74,7 @@ DEFAULT_PROVIDER_MODELS = {
     "anthropic": "claude-3-5-haiku-latest",
     "qwen": "qwen-plus",
     "deepseek": "deepseek-chat",
-    "9router": "cc/claude-sonnet-4.5",
+    "custom": None,
 }
 SUPPORTED_PROVIDERS = tuple(DEFAULT_PROVIDER_MODELS.keys())
 MODEL_INVENTORY_TTL_SECONDS = 60
@@ -91,7 +89,8 @@ def _read_user_ai_config(user_id: Optional[str]) -> Dict[str, Optional[str]]:
 
     session = SessionLocal()
     try:
-        config = session.query(UserAIConfig).filter(UserAIConfig.userId == user_id).first()
+        config = (session.query(UserAIConfig).filter(UserAIConfig.userId == user_id)
+                  .order_by(UserAIConfig.changed_on.desc(), UserAIConfig.created_on.desc()).first())
         if config:
             return {
                 "api_key": decrypt_key(config.apiKey) if config.apiKey else None,
@@ -144,6 +143,18 @@ def get_ai_api_key(user_id: Optional[str] = None, provider: Optional[str] = None
     return None
 
 
+def validate_base_url(base_url: str) -> str:
+    """Require an HTTP(S) URL with a hostname and valid port."""
+    try:
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Base URL must be a valid HTTP(S) URL with a hostname") from exc
+    return base_url
+
+
 def resolve_base_url(provider: str, user_id: Optional[str] = None) -> Optional[str]:
     """Resolves the OpenAI-compatible base URL: DB override, then env, then default."""
     normalized_provider = normalize_provider(provider)
@@ -151,8 +162,7 @@ def resolve_base_url(provider: str, user_id: Optional[str] = None) -> Optional[s
     if db_base_url:
         return db_base_url
 
-    # Sanitize provider into a valid env-var name ("9router" -> "_9ROUTER_BASE_URL").
-    env_key = re.sub(r"\W|^(?=\d)", "_", normalized_provider.upper()) + "_BASE_URL"
+    env_key = normalized_provider.upper() + "_BASE_URL"
     return os.getenv(env_key) or OPENAI_COMPATIBLE_BASE_URLS.get(normalized_provider)
 
 
@@ -166,8 +176,6 @@ def normalize_provider(provider: Optional[str]) -> str:
         "claude": "anthropic",
         "anthripic": "anthropic",
         "alibaba qwen": "qwen",
-        "9 router": "9router",
-        "ninerouter": "9router",
     }
     return aliases.get(value, value)
 
@@ -255,7 +263,7 @@ class LangChainRuntime:
 
     def is_openai_compatible_provider(self, provider: Optional[str]) -> bool:
         normalized = normalize_provider(provider)
-        return normalized == "openai" or normalized in OPENAI_COMPATIBLE_BASE_URLS
+        return normalized == "openai" or normalized == "custom" or normalized in OPENAI_COMPATIBLE_BASE_URLS
 
     def list_available_models(self, provider: str, user_id: Optional[str] = None) -> List[str]:
         normalized = normalize_provider(provider)
@@ -266,7 +274,13 @@ class LangChainRuntime:
         if not api_key:
             raise RuntimeError(f"Missing {normalized} API key. Configure environment variables or AI Settings.")
 
-        base_url = resolve_base_url(normalized, user_id) or OPENAI_DEFAULT_BASE_URL
+        base_url = resolve_base_url(normalized, user_id)
+        if normalized == "custom" and not base_url:
+            raise RuntimeError("Custom Provider requires a Base URL in AI Settings")
+        base_url = base_url or OPENAI_DEFAULT_BASE_URL
+        parsed_base_url = urlsplit(base_url)
+        if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.hostname:
+            raise RuntimeError("Invalid Base URL: expected an HTTP(S) URL with a hostname")
         normalized_base_url = base_url.rstrip("/")
         cache_key = (user_id or "", normalized, normalized_base_url)
         now = time.monotonic()
@@ -323,6 +337,9 @@ class LangChainRuntime:
         try:
             candidates = self.list_available_models(normalized, user_id)
         except Exception as inventory_error:
+            if normalized == "custom":
+                reason = self._safe_provider_error(inventory_error, api_key)
+                raise RuntimeError(f"Custom Provider model inventory failed: {reason}") from inventory_error
             default_model = DEFAULT_PROVIDER_MODELS.get(normalized, self.default_model)
             try:
                 self._probe_model_access(default_model, user_id, normalized)
@@ -383,6 +400,8 @@ class LangChainRuntime:
 
         target_provider = normalize_provider(provider or self.resolve_provider(model_id, user_id))
         target_model = model_id or DEFAULT_PROVIDER_MODELS.get(target_provider, self.default_model)
+        if not target_model:
+            raise RuntimeError("Custom Provider requires a model ID")
 
         if model_id:
             session = SessionLocal()
@@ -397,6 +416,8 @@ class LangChainRuntime:
             raise RuntimeError("Anthropic integration is not installed")
 
         api_key = get_ai_api_key(user_id, target_provider)
+        if target_provider == "custom" and not resolve_base_url(target_provider, user_id):
+            raise RuntimeError("Custom Provider requires a Base URL in AI Settings")
         if not api_key:
             raise RuntimeError(f"Missing {target_provider} API key. Configure environment variables or AI Settings.")
 
@@ -438,6 +459,8 @@ class LangChainRuntime:
 
         target_provider = normalize_provider(provider or self.resolve_provider(model_id, user_id))
         target_model = model_id or DEFAULT_PROVIDER_MODELS.get(target_provider, self.default_model)
+        if not target_model:
+            raise RuntimeError("Custom Provider requires a model ID")
         self.validate_model_ready(model_id=model_id, user_id=user_id, provider=target_provider)
 
         api_key = get_ai_api_key(user_id, target_provider)
@@ -457,6 +480,10 @@ class LangChainRuntime:
         if self.is_openai_compatible_provider(target_provider):
             base_url = resolve_base_url(target_provider, user_id)
             if base_url:
+                try:
+                    base_url = validate_base_url(base_url)
+                except ValueError as exc:
+                    raise RuntimeError(f"Invalid Base URL: {exc}") from exc
                 return ChatOpenAI(api_key=api_key, base_url=base_url, **kwargs)
 
         return ChatOpenAI(api_key=api_key, **kwargs)

@@ -1,5 +1,7 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
+from urllib.parse import urlsplit
 from pydantic import BaseModel
 from models import SessionLocal, UserAIConfig
 from utils.auth_middleware import get_current_user
@@ -39,8 +41,6 @@ def _provider_matches(config_provider: str, requested_provider: str) -> bool:
         "claude": "anthropic",
         "anthropic": "anthropic",
         "alibaba qwen": "qwen",
-        "9 router": "9router",
-        "ninerouter": "9router",
     }
     config_value = (config_provider or "Google").strip().lower()
     requested_value = (requested_provider or "Google").strip().lower()
@@ -63,7 +63,8 @@ def get_config(
     session = SessionLocal()
     try:
         config = _find_config(session, user_id, requested_provider) if provider else (
-            session.query(UserAIConfig).filter(UserAIConfig.userId == user_id).first()
+            session.query(UserAIConfig).filter(UserAIConfig.userId == user_id)
+            .order_by(UserAIConfig.changed_on.desc(), UserAIConfig.created_on.desc()).first()
         )
         if not config:
             return {'apiKey': None, 'provider': requested_provider, 'baseUrl': ''}
@@ -89,15 +90,27 @@ def save_config(data: SaveConfigRequest, current_user: dict = Depends(get_curren
     api_key = data.apiKey
     provider = (data.provider or "Google").strip()
     base_url = (data.baseUrl or "").strip() or None
+    saved_at = datetime.utcnow()
 
     if not api_key:
         raise HTTPException(status_code=400, detail='API Key is required')
+    if provider.lower() == 'custom' and not base_url:
+        raise HTTPException(status_code=400, detail='Custom Provider requires a Base URL')
+    if base_url:
+        try:
+            parsed_base_url = urlsplit(base_url)
+            if parsed_base_url.scheme not in {'http', 'https'} or not parsed_base_url.hostname:
+                raise ValueError
+            parsed_base_url.port
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail='Base URL must be a valid HTTP(S) URL with a hostname') from exc
 
     session = SessionLocal()
     try:
         if api_key == '********':
             config = _find_config(session, user_id, provider)
             if config:
+                config.changed_on = saved_at
                 config.baseUrl = base_url
                 session.commit()
                 return {'message': 'Config updated successfully'}
@@ -110,13 +123,15 @@ def save_config(data: SaveConfigRequest, current_user: dict = Depends(get_curren
             config.apiKey = encrypted_key
             config.provider = provider
             config.baseUrl = base_url
+            config.changed_on = saved_at
         else:
             config = UserAIConfig(
                 id=str(uuid.uuid4()),
                 userId=user_id,
                 apiKey=encrypted_key,
                 provider=provider,
-                baseUrl=base_url
+                baseUrl=base_url,
+                changed_on=saved_at,
             )
             session.add(config)
         session.commit()

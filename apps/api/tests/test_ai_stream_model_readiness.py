@@ -99,21 +99,21 @@ def test_stream_auto_uses_selected_openai_compatible_model(mocker):
     mocker.patch.object(ai_service, "_quick_general_response", return_value=None)
     mocker.patch("services.ai_service.rag_pipeline_service.understand_query", return_value=understanding)
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", return_value=None)
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     select_auto = mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
-        return_value={"provider": "9router", "model": "kr/available-model"},
+        return_value={"provider": "custom", "model": "kr/available-model"},
     )
     validate = mocker.patch("services.ai_service.langchain_runtime.validate_model_ready")
     stream_text = mocker.patch("services.ai_service.langchain_runtime.stream_text", return_value=iter(["response"]))
 
     events = list(ai_service.stream_generate_response("Compare join strategies", user_id="user-1"))
 
-    select_auto.assert_called_once_with(provider="9router", user_id="user-1")
+    select_auto.assert_called_once_with(provider="custom", user_id="user-1")
     validate.assert_not_called()
     assert stream_text.call_args.kwargs["model_id"] == "kr/available-model"
-    assert stream_text.call_args.kwargs["provider"] == "9router"
+    assert stream_text.call_args.kwargs["provider"] == "custom"
     assert any(event == "message" and payload == "response" for event, payload in events)
 
 
@@ -128,7 +128,7 @@ def test_stream_auto_runs_real_selector_and_reuses_candidate_provider(mocker):
     mocker.patch.object(ai_service, "_quick_general_response", return_value=None)
     mocker.patch("services.ai_service.rag_pipeline_service.understand_query", return_value=understanding)
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", return_value=None)
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch.object(langchain_runtime, "list_available_models", return_value=["candidate-a", "candidate-b"])
     probe = mocker.patch.object(langchain_runtime, "_probe_model_access")
     mocker.patch("services.ai.langchain_runtime.get_ai_api_key", return_value="secret-value")
@@ -139,8 +139,8 @@ def test_stream_auto_runs_real_selector_and_reuses_candidate_provider(mocker):
     events = list(ai_service.stream_generate_response("Compare join strategies", user_id="user-1"))
 
     assert stream_text.call_args.kwargs["model_id"] == "candidate-b"
-    assert stream_text.call_args.kwargs["provider"] == "9router"
-    probe.assert_called_once_with("candidate-b", "user-1", "9router")
+    assert stream_text.call_args.kwargs["provider"] == "custom"
+    probe.assert_called_once_with("candidate-b", "user-1", "custom")
     assert any(event == "message" and payload == "response" for event, payload in events)
 
 
@@ -155,7 +155,7 @@ def test_stream_task_assigned_compatible_model_does_not_use_auto_fallback(mocker
     )
     mocker.patch(
         "services.ai_service.langchain_runtime.resolve_provider",
-        return_value="9router",
+        return_value="custom",
     )
     validate = mocker.patch(
         "services.ai_service.langchain_runtime.validate_model_ready",
@@ -172,7 +172,7 @@ def test_stream_task_assigned_compatible_model_does_not_use_auto_fallback(mocker
     validate.assert_called_once_with(
         model_id="assigned/model",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         probe_remote=True,
     )
     select_auto.assert_not_called()
@@ -200,19 +200,19 @@ def test_sql_preview_repair_invocation_reuses_selected_provider_and_model(mocker
         db_id="db-1",
         model_id="candidate-b",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         history=[],
     ))
 
     assert stream_text.call_args.kwargs["model_id"] == "candidate-b"
-    assert stream_text.call_args.kwargs["provider"] == "9router"
+    assert stream_text.call_args.kwargs["provider"] == "custom"
     invoke_text.assert_called_once_with(
         system_prompt="system",
         prompt=mocker.ANY,
         db_id="db-1",
         model_id="candidate-b",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         temperature=0,
     )
     assert events
@@ -234,12 +234,12 @@ def test_auto_selection_precedes_understanding_and_reuses_selected_model(mocker)
         return None
 
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", side_effect=resolve_task)
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
         side_effect=lambda provider, user_id: calls.append(("select", provider, user_id))
-        or {"provider": "9router", "model": "auto/selected"},
+        or {"provider": "custom", "model": "auto/selected"},
     )
 
     def understand(*args, **kwargs):
@@ -251,10 +251,10 @@ def test_auto_selection_precedes_understanding_and_reuses_selected_model(mocker)
 
     events = list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
-    assert calls.index(("select", "9router", "user-1")) < calls.index(("understand", "auto/selected"))
-    assert calls.count(("select", "9router", "user-1")) == 1
+    assert calls.index(("select", "custom", "user-1")) < calls.index(("understand", "auto/selected"))
+    assert calls.count(("select", "custom", "user-1")) == 1
     assert stream_text.call_args.kwargs["model_id"] == "auto/selected"
-    assert stream_text.call_args.kwargs["provider"] == "9router"
+    assert stream_text.call_args.kwargs["provider"] == "custom"
     assert any(event == "message" and payload == "response" for event, payload in events)
 
 
@@ -274,13 +274,13 @@ def test_triage_assignment_is_used_for_understanding_before_final_auto_selection
         return "triage/assigned" if task_key == "router.triage" else None
 
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", side_effect=resolve_task)
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     mocker.patch("services.ai_service.langchain_runtime.validate_model_ready")
 
     def select(provider, user_id):
         calls.append(("select", provider, user_id))
-        return {"provider": "9router", "model": "auto/final"}
+        return {"provider": "custom", "model": "auto/final"}
 
     mocker.patch("services.ai_service.langchain_runtime.select_auto_model", side_effect=select)
 
@@ -293,9 +293,9 @@ def test_triage_assignment_is_used_for_understanding_before_final_auto_selection
 
     list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
-    assert calls.index(("understand", "triage/assigned")) < calls.index(("select", "9router", "user-1"))
+    assert calls.index(("understand", "triage/assigned")) < calls.index(("select", "custom", "user-1"))
     assert stream_text.call_args.kwargs["model_id"] == "auto/final"
-    assert calls.count(("select", "9router", "user-1")) == 1
+    assert calls.count(("select", "custom", "user-1")) == 1
 
 
 def test_final_compatible_task_assignment_overrides_preselected_auto_and_is_validated(mocker):
@@ -316,12 +316,12 @@ def test_final_compatible_task_assignment_overrides_preselected_auto_and_is_vali
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", side_effect=resolve_task)
     mocker.patch(
         "services.ai_service.langchain_runtime.resolve_provider",
-        side_effect=lambda model_id=None, user_id=None: "qwen" if model_id == "assigned/final" else "9router",
+        side_effect=lambda model_id=None, user_id=None: "qwen" if model_id == "assigned/final" else "custom",
     )
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     select_auto = mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
-        return_value={"provider": "9router", "model": "auto/preselected"},
+        return_value={"provider": "custom", "model": "auto/preselected"},
     )
     mocker.patch("services.ai_service.rag_pipeline_service.understand_query", return_value=understanding)
     validate = mocker.patch("services.ai_service.langchain_runtime.validate_model_ready")
@@ -329,7 +329,7 @@ def test_final_compatible_task_assignment_overrides_preselected_auto_and_is_vali
 
     list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
-    select_auto.assert_called_once_with(provider="9router", user_id="user-1")
+    select_auto.assert_called_once_with(provider="custom", user_id="user-1")
     assert task_calls == [("router.triage", None), ("chat.general", None)]
     validate.assert_called_once_with(
         model_id="assigned/final",
@@ -355,11 +355,11 @@ def test_final_task_assignment_failure_does_not_fallback_to_preselected_auto(moc
         side_effect=lambda task_key, user_id, explicit_model_id, database_id:
             None if task_key == "router.triage" else "assigned/final",
     )
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     select_auto = mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
-        return_value={"provider": "9router", "model": "auto/preselected"},
+        return_value={"provider": "custom", "model": "auto/preselected"},
     )
     mocker.patch("services.ai_service.rag_pipeline_service.understand_query", return_value=understanding)
     validate = mocker.patch(
@@ -371,11 +371,11 @@ def test_final_task_assignment_failure_does_not_fallback_to_preselected_auto(moc
     events = list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
     assert events[-1] == ("error", "assigned model unavailable")
-    select_auto.assert_called_once_with(provider="9router", user_id="user-1")
+    select_auto.assert_called_once_with(provider="custom", user_id="user-1")
     validate.assert_called_once_with(
         model_id="assigned/final",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         probe_remote=True,
     )
     stream_text.assert_not_called()
@@ -395,7 +395,7 @@ def test_inventory_failure_default_is_selected_once_before_understanding(mocker)
         "services.ai_service.task_model_router.resolve_model_id",
         return_value=None,
     )
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="qwen")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     selector = mocker.spy(langchain_runtime, "select_auto_model")
     mocker.patch.object(
@@ -419,10 +419,10 @@ def test_inventory_failure_default_is_selected_once_before_understanding(mocker)
 
     list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
-    selector.assert_called_once_with(provider="9router", user_id="user-1")
-    probe.assert_called_once_with("cc/claude-sonnet-4.5", "user-1", "9router")
-    assert calls.index(("cc/claude-sonnet-4.5", "9router")) < calls.index(("understand", "cc/claude-sonnet-4.5"))
-    assert stream_text.call_args.kwargs["model_id"] == "cc/claude-sonnet-4.5"
+    selector.assert_called_once_with(provider="qwen", user_id="user-1")
+    probe.assert_called_once_with("qwen-plus", "user-1", "qwen")
+    assert calls.index(("qwen-plus", "qwen")) < calls.index(("understand", "qwen-plus"))
+    assert stream_text.call_args.kwargs["model_id"] == "qwen-plus"
 
 
 def test_no_explicit_quick_response_bypasses_routing_and_inventory(mocker):
@@ -454,11 +454,11 @@ def test_pre_understanding_auto_selection_failure_emits_readiness_error(mocker):
         "services.ai_service.task_model_router.resolve_model_id",
         return_value=None,
     )
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
-        side_effect=RuntimeError("Auto model selection failed for provider 9router after 3 attempts: unavailable"),
+        side_effect=RuntimeError("Custom Provider model inventory failed: unavailable"),
     )
     understand = mocker.patch("services.ai_service.rag_pipeline_service.understand_query")
     build_context = mocker.patch("services.ai_service.rag_pipeline_service.build_context_for_understanding")
@@ -468,7 +468,7 @@ def test_pre_understanding_auto_selection_failure_emits_readiness_error(mocker):
 
     assert events == [
         ("thinking", MODEL_PREFLIGHT_STATUS),
-        ("error", "Auto model selection failed for provider 9router after 3 attempts: unavailable"),
+        ("error", "Custom Provider model inventory failed: unavailable"),
     ]
     understand.assert_not_called()
     build_context.assert_not_called()
@@ -481,7 +481,7 @@ def test_triage_assignment_readiness_failure_stops_before_understanding(mocker):
         "services.ai_service.task_model_router.resolve_model_id",
         return_value="triage/assigned",
     )
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     validate = mocker.patch(
         "services.ai_service.langchain_runtime.validate_model_ready",
         side_effect=RuntimeError("triage model unavailable"),
@@ -500,7 +500,7 @@ def test_triage_assignment_readiness_failure_stops_before_understanding(mocker):
     validate.assert_called_once_with(
         model_id="triage/assigned",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         probe_remote=True,
     )
     select_auto.assert_not_called()
@@ -524,7 +524,7 @@ def test_triage_assignment_is_validated_before_understanding_and_final_auto(mock
         return "triage/assigned" if task_key == "router.triage" else None
 
     mocker.patch("services.ai_service.task_model_router.resolve_model_id", side_effect=resolve_task)
-    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="9router")
+    mocker.patch("services.ai_service.langchain_runtime.resolve_provider", return_value="custom")
     mocker.patch("services.ai_service.langchain_runtime.is_openai_compatible_provider", return_value=True)
     validate = mocker.patch(
         "services.ai_service.langchain_runtime.validate_model_ready",
@@ -539,19 +539,19 @@ def test_triage_assignment_is_validated_before_understanding_and_final_auto(mock
     mocker.patch(
         "services.ai_service.langchain_runtime.select_auto_model",
         side_effect=lambda provider, user_id: calls.append(("select", provider))
-        or {"provider": "9router", "model": "auto/final"},
+        or {"provider": "custom", "model": "auto/final"},
     )
     stream_text = mocker.patch("services.ai_service.langchain_runtime.stream_text", return_value=iter(["response"]))
 
     list(ai_service.stream_generate_response("Compare joins", user_id="user-1", db_id="db-1"))
 
     assert calls.index(("validate", "triage/assigned")) < calls.index(("understand", "triage/assigned"))
-    assert calls.index(("understand", "triage/assigned")) < calls.index(("select", "9router"))
+    assert calls.index(("understand", "triage/assigned")) < calls.index(("select", "custom"))
     validate.assert_called_once_with(
         model_id="triage/assigned",
         user_id="user-1",
-        provider="9router",
+        provider="custom",
         probe_remote=True,
     )
     assert stream_text.call_args.kwargs["model_id"] == "auto/final"
-    assert stream_text.call_args.kwargs["provider"] == "9router"
+    assert stream_text.call_args.kwargs["provider"] == "custom"

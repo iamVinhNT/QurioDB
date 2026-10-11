@@ -29,6 +29,7 @@ def setup_database():
         print("Backend: Checking and initializing database schema...")
         Base.metadata.create_all(engine)
         migrate_user_ai_configs_for_provider_keys(engine)
+        migrate_legacy_gateway_provider(engine)
         migrate_remove_workspace_git_metadata(engine)
 
         session = SessionLocal()
@@ -157,6 +158,42 @@ def migrate_user_ai_configs_for_provider_keys(engine):
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_user_ai_configs_user_provider
                 ON user_ai_configs ("userId", provider)
                 """
+            )
+
+
+def migrate_legacy_gateway_provider(engine):
+    """Move legacy gateway keys and registered models to Custom Provider."""
+    if not engine or engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        if _sqlite_table_exists(connection, "user_ai_configs"):
+            connection.exec_driver_sql(
+                '''
+                UPDATE user_ai_configs
+                SET provider = 'Custom'
+                WHERE LOWER(provider) = '9router'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_ai_configs AS existing
+                      WHERE existing."userId" = user_ai_configs."userId"
+                        AND LOWER(existing.provider) = 'custom'
+                  )
+                '''
+            )
+            connection.exec_driver_sql(
+                '''
+                DELETE FROM user_ai_configs
+                WHERE LOWER(provider) = '9router'
+                  AND EXISTS (
+                      SELECT 1 FROM user_ai_configs AS existing
+                      WHERE existing."userId" = user_ai_configs."userId"
+                        AND LOWER(existing.provider) = 'custom'
+                  )
+                '''
+            )
+        if _sqlite_table_exists(connection, "ai_models"):
+            connection.exec_driver_sql(
+                "UPDATE ai_models SET provider = 'Custom' WHERE LOWER(provider) = '9router'"
             )
 
 
