@@ -22,6 +22,7 @@ on:
           - all
           - windows
           - linux
+          - macos
 
 permissions:
   contents: read
@@ -287,8 +288,135 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
+  build-macos:
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos'
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      MACOS_TARGET: ${{ matrix.target }}
+      MACOS_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Cache Bun download artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          cache-targets: true
+          key: macos-${{ matrix.target }}
+      - name: Prepare version and Python environment
+        run: |
+          printf 'QURIODB_VERSION=%s\n' "$RELEASE_VERSION" > .env
+          python -m venv apps/api/venv
+          test "$(rustc -Vv | sed -n 's/^host: //p')" = "$MACOS_TARGET"
+      - name: Install JavaScript dependencies and validate version
+        run: |
+          bun install --frozen-lockfile
+          bun run version:check
+      - name: Build macOS FastAPI sidecar
+        run: |
+          bash apps/desktop/scripts/build-sidecar.sh
+          test -x "apps/desktop/src-tauri/bin/api-$MACOS_TARGET"
+      - name: Smoke-test macOS FastAPI sidecar
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import secrets
+          import socket
+          import subprocess
+          import time
+          from urllib.error import URLError
+          from urllib.request import Request, urlopen
+
+          with socket.socket() as listener:
+              listener.bind(("127.0.0.1", 0))
+              port = listener.getsockname()[1]
+          nonce = secrets.token_hex(32)
+          environment = dict(os.environ, DISABLE_AUTH="true",
+                             QURIODB_DESKTOP_PORT=str(port),
+                             QURIODB_STARTUP_NONCE=nonce,
+                             QURIODB_DESKTOP_PARENT_PID=str(os.getpid()))
+          binary = f"apps/desktop/src-tauri/bin/api-{os.environ['MACOS_TARGET']}"
+          log_path = Path(os.environ["RUNNER_TEMP"]) / "quriodb-sidecar.log"
+          request = Request(f"http://127.0.0.1:{port}/api/desktop/health",
+                            headers={"X-QurioDB-Startup-Nonce": nonce})
+          with log_path.open("w") as log:
+              process = subprocess.Popen([binary], env=environment, stdout=log, stderr=log)
+              try:
+                  deadline = time.monotonic() + 90
+                  while time.monotonic() < deadline:
+                      if process.poll() is not None:
+                          raise RuntimeError(f"macOS sidecar exited with code {process.returncode}")
+                      try:
+                          with urlopen(request, timeout=2) as response:
+                              body = json.load(response)
+                      except URLError:
+                          time.sleep(0.5)
+                          continue
+                      if body != {"status": "ok", "service": "quriodb-desktop"}:
+                          raise RuntimeError("Invalid desktop health response")
+                      break
+                  else:
+                      raise RuntimeError("macOS sidecar was not ready within 90 seconds")
+              except Exception:
+                  print(log_path.read_text())
+                  raise
+              finally:
+                  if process.poll() is None:
+                      process.terminate()
+                      try:
+                          process.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          process.kill()
+                          process.wait()
+                          raise RuntimeError("macOS sidecar did not stop within 10 seconds")
+          PY
+      - name: Build macOS APP and DMG bundles
+        run: |
+          (cd apps/desktop && bun run tauri build --target "$MACOS_TARGET" --bundles app,dmg)
+      - name: Collect macOS release assets
+        run: |
+          BUNDLE_DIR="apps/desktop/src-tauri/target/$MACOS_TARGET/release/bundle"
+          mkdir -p release-assets
+          cp "$BUNDLE_DIR/dmg/QurioDB_${RELEASE_VERSION}_${MACOS_ARCH}.dmg" release-assets/
+          tar -czf "release-assets/QurioDB_${RELEASE_VERSION}_${MACOS_ARCH}.app.tar.gz" \
+            -C "$BUNDLE_DIR/macos" QurioDB.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     permissions:

@@ -335,11 +335,11 @@ describe("Root package.json desktop scripts validation", () => {
 describe("Desktop release workflow", () => {
   const workflowPath = path.join(process.cwd(), ".github/workflows/release-desktop.yml");
 
-  it("supports platform-selective manual preflight while forcing both platforms for tags", () => {
+  it("supports platform-selective manual preflight while forcing all platforms for tags", () => {
     const workflow = fs.readFileSync(workflowPath, "utf-8");
 
     expect(workflow).toMatch(
-      /platform:\s*\n\s+description:[\s\S]*?\n\s+required:\s+true\s*\n\s+default:\s+all\s*\n\s+type:\s+choice\s*\n\s+options:\s*\n\s+- all\s*\n\s+- windows\s*\n\s+- linux/,
+      /platform:\s*\n\s+description:[\s\S]*?\n\s+required:\s+true\s*\n\s+default:\s+all\s*\n\s+type:\s+choice\s*\n\s+options:\s*\n\s+- all\s*\n\s+- windows\s*\n\s+- linux\s*\n\s+- macos/,
     );
     expect(workflow).toContain(
       "if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows'",
@@ -347,7 +347,10 @@ describe("Desktop release workflow", () => {
     expect(workflow).toContain(
       "if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux'",
     );
-    expect(workflow).toContain("needs: [build-windows, build-linux]");
+    expect(workflow).toContain(
+      "if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos'",
+    );
+    expect(workflow).toContain("needs: [build-windows, build-linux, build-macos]");
     expect(workflow).toContain(
       "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
     );
@@ -356,18 +359,20 @@ describe("Desktop release workflow", () => {
   it("caches dependencies and Rust targets without caching release outputs", () => {
     const workflow = fs.readFileSync(workflowPath, "utf-8");
 
-    expect(workflow.split("path: ~/.bun/install/cache").length - 1).toBe(2);
+    expect(workflow.split("path: ~/.bun/install/cache").length - 1).toBe(3);
     expect(workflow.split("key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}").length - 1).toBe(2);
-    expect(workflow.split("cache: pip").length - 1).toBe(2);
-    expect(workflow.split("cache-dependency-path: apps/api/requirements.txt").length - 1).toBe(2);
+    expect(workflow.split("cache: pip").length - 1).toBe(3);
+    expect(workflow.split("cache-dependency-path: apps/api/requirements.txt").length - 1).toBe(3);
     expect(workflow).toContain("key: windows-msvc");
     expect(workflow).toContain("key: linux-gnu");
-    expect(workflow.split("cache-targets: true").length - 1).toBe(2);
-    expect(workflow.split("workspaces: apps/desktop/src-tauri -> target").length - 1).toBe(2);
+    expect(workflow).toContain("key: macos-${{ matrix.target }}");
+    expect(workflow).toContain("${{ runner.os }}-${{ runner.arch }}-bun-");
+    expect(workflow.split("cache-targets: true").length - 1).toBe(3);
+    expect(workflow.split("workspaces: apps/desktop/src-tauri -> target").length - 1).toBe(3);
     expect(workflow).not.toMatch(/cache[^\\n]*(node_modules|venv|\\.env|release-assets|api(?:\\.exe)?)/i);
   });
 
-  it("builds both native bundles and releases only after both builds pass", () => {
+  it("builds native bundles and releases only after all builds pass", () => {
     expect(fs.existsSync(workflowPath)).toBe(true);
     const workflow = fs.readFileSync(workflowPath, "utf-8");
 
@@ -388,7 +393,7 @@ describe("Desktop release workflow", () => {
     expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_x64-setup\.exe/);
     expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_amd64\.deb/);
     expect(workflow).toMatch(/QurioDB_\$\{(?:VERSION|version)\}_amd64\.AppImage/);
-    expect(workflow).toContain("needs: [build-windows, build-linux]");
+    expect(workflow).toContain("needs: [build-windows, build-linux, build-macos]");
     expect(workflow).toContain('gh release create "$GITHUB_REF_NAME"');
     expect(workflow).toContain('gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"');
     expect(workflow).toContain("Release already exists; refusing to modify or overwrite");
