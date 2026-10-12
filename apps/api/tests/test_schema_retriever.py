@@ -258,9 +258,10 @@ def test_stream_response_uses_rag_context_for_database_chat(monkeypatch):
     monkeypatch.setattr("services.ai_service.rag_pipeline_service.build_context_for_understanding", build_rag_context)
     monkeypatch.setattr("services.ai_service.feedback_context_service.get_feedback_context", lambda *_: "")
     monkeypatch.setattr("services.ai_service.langchain_runtime.stream_text", lambda **_: iter(["done"]))
+    monkeypatch.setattr("services.ai_service.langchain_runtime.invoke_text", lambda **_: "")
     monkeypatch.setattr("services.ai_service.langchain_runtime.validate_model_ready", lambda **_: None)
 
-    list(service.stream_generate_response("Những người dùng nào dùng từ ngữ nhạy cảm", db_id="db-1", schema="public", history=[]))
+    list(service.stream_generate_response("Những người dùng nào dùng từ ngữ nhạy cảm", db_id="db-1", schema="public", history=[], model_id="model-1"))
 
     assert called["rag"] is True
 
@@ -305,11 +306,11 @@ def test_stream_response_repairs_sql_after_preview_error(monkeypatch):
                 error="relation missing_table does not exist",
                 to_dict=lambda: {"error": "relation missing_table does not exist"},
             )
-        return SimpleNamespace(ok=True, sql=sql, error="", to_dict=lambda: {})
+        return SimpleNamespace(ok=True, sql=sql, error="", columns=["id"], data=[], to_dict=lambda: {})
 
     monkeypatch.setattr("services.ai_service.sql_execution_verifier.preview", preview)
 
-    events = list(service.stream_generate_response("show users", db_id="db-1", schema="public", history=[]))
+    events = list(service.stream_generate_response("show users", db_id="db-1", schema="public", history=[], model_id="model-1"))
 
     sql_events = [chunk.strip() for event, chunk in events if event == "sql"]
     thinking = [chunk for event, chunk in events if event == "thinking"]

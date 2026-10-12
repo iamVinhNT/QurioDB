@@ -17,6 +17,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Changed
 
+- AI Assistant Auto Provider randomly selects an active registered model with the current user's configured provider and keeps that pair throughout each request. See [change-log/2026-10-12-2339-auto-provider-registered-models.md](change-log/2026-10-12-2339-auto-provider-registered-models.md).
 - Desktop package metadata and installer links now use version 0.1.5 for the macOS CI release. See [change-log/2026-10-12-2308-desktop-version-015.md](change-log/2026-10-12-2308-desktop-version-015.md).
 - AI chat supports MongoDB through its validated read-only agent and displays bounded query results immediately for every database type, with restored history and nested values. See [change-log/2026-10-10-2335-ai-mongodb-inline-results.md](change-log/2026-10-10-2335-ai-mongodb-inline-results.md).
 

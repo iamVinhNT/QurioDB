@@ -105,65 +105,32 @@ class AIService(SqlAIService, AgentAIService):
     ):
         """Streams responses for chat interfaces using SSE events."""
         history = history or []
-        request_model_id = model_id
-        readiness_checked = False
-        provider = None
-        preselected_auto = None
-        triage_model_id = None
-        if request_model_id:
-            provider = langchain_runtime.resolve_provider(model_id=request_model_id, user_id=user_id)
-            yield "thinking", MODEL_PREFLIGHT_STATUS
-            try:
+        if not model_id:
+            quick_response = self._quick_general_response(prompt)
+            if quick_response:
+                yield "message", quick_response
+                return
+
+        yield "thinking", MODEL_PREFLIGHT_STATUS
+        try:
+            if model_id:
+                provider = langchain_runtime.resolve_provider(model_id=model_id, user_id=user_id)
                 langchain_runtime.validate_model_ready(
-                    model_id=request_model_id,
-                    user_id=user_id,
-                    provider=provider,
-                    probe_remote=True,
+                    model_id=model_id, user_id=user_id, provider=provider, probe_remote=True,
                 )
-                readiness_checked = True
-            except Exception as readiness_error:
-                logger.warning("AI model readiness check failed before stream setup: %s", readiness_error)
-                yield "error", str(readiness_error)
-                return
-            quick_response = self._quick_general_response(prompt)
-            if quick_response:
-                yield "message", quick_response
-                return
-        else:
-            quick_response = self._quick_general_response(prompt)
-            if quick_response:
-                yield "message", quick_response
-                return
-            triage_model_id = task_model_router.resolve_model_id("router.triage", user_id, None, db_id)
-            if triage_model_id:
-                model_id = triage_model_id
-                provider = langchain_runtime.resolve_provider(model_id=triage_model_id, user_id=user_id)
-                yield "thinking", MODEL_PREFLIGHT_STATUS
-                try:
-                    langchain_runtime.validate_model_ready(
-                        model_id=triage_model_id,
-                        user_id=user_id,
-                        provider=provider,
-                        probe_remote=True,
-                    )
-                except Exception as readiness_error:
-                    logger.warning("AI triage model readiness check failed before understanding: %s", readiness_error)
-                    yield "error", str(readiness_error)
-                    return
             else:
-                provider = langchain_runtime.resolve_provider(model_id=None, user_id=user_id)
-                if langchain_runtime.is_openai_compatible_provider(provider):
-                    yield "thinking", MODEL_PREFLIGHT_STATUS
-                    try:
-                        selection = langchain_runtime.select_auto_model(provider=provider, user_id=user_id)
-                        preselected_auto = selection
-                        model_id = selection["model"]
-                        provider = selection["provider"]
-                        readiness_checked = True
-                    except Exception as readiness_error:
-                        logger.warning("AI model readiness check failed before understanding: %s", readiness_error)
-                        yield "error", str(readiness_error)
-                        return
+                selection = langchain_runtime.select_auto_model(user_id=user_id)
+                model_id = selection["model"]
+                provider = selection["provider"]
+        except Exception as readiness_error:
+            logger.warning("AI model readiness check failed before streaming: %s", readiness_error)
+            yield "error", str(readiness_error)
+            return
+
+        quick_response = self._quick_general_response(prompt)
+        if quick_response:
+            yield "message", quick_response
+            return
 
         understanding = rag_pipeline_service.understand_query(
             prompt,
@@ -183,57 +150,10 @@ class AIService(SqlAIService, AgentAIService):
             and getattr(understanding, "rag_mode", "") == "deep"
             and getattr(understanding, "exploration_score", 0.0) >= 0.65
         )
-
         resolved_task_key = task_key or (
             "agent.mongodb_readonly" if is_mongodb_request
             else "chat.database" if is_database_request else "chat.general"
         )
-        final_assignment = task_model_router.resolve_model_id(
-            resolved_task_key,
-            user_id,
-            request_model_id,
-            db_id,
-        )
-        if request_model_id:
-            model_id = request_model_id
-        elif final_assignment:
-            model_id = final_assignment
-            provider = langchain_runtime.resolve_provider(model_id=model_id, user_id=user_id)
-            yield "thinking", MODEL_PREFLIGHT_STATUS
-            try:
-                langchain_runtime.validate_model_ready(
-                    model_id=model_id,
-                    user_id=user_id,
-                    provider=provider,
-                    probe_remote=True,
-                )
-            except Exception as readiness_error:
-                logger.warning("AI model readiness check failed before streaming: %s", readiness_error)
-                yield "error", str(readiness_error)
-                return
-        elif preselected_auto:
-            model_id = preselected_auto["model"]
-            provider = preselected_auto["provider"]
-        else:
-            model_id = None
-            provider = langchain_runtime.resolve_provider(model_id=None, user_id=user_id)
-            yield "thinking", MODEL_PREFLIGHT_STATUS
-            try:
-                if langchain_runtime.is_openai_compatible_provider(provider):
-                    selection = langchain_runtime.select_auto_model(provider=provider, user_id=user_id)
-                    model_id = selection["model"]
-                    provider = selection["provider"]
-                else:
-                    langchain_runtime.validate_model_ready(
-                        model_id=None,
-                        user_id=user_id,
-                        provider=provider,
-                        probe_remote=True,
-                    )
-            except Exception as readiness_error:
-                logger.warning("AI model readiness check failed before streaming: %s", readiness_error)
-                yield "error", str(readiness_error)
-                return
 
         # Yield clean text. Frontend will handle wrapping for the UI steps.
         yield "thinking", RESPONSE_START_STATUS

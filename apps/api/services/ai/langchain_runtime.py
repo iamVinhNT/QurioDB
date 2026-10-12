@@ -331,42 +331,45 @@ class LangChainRuntime:
         message = re.sub(r"\s+(?:-\s+)?[\{\[].*$", " [upstream response omitted]", message)
         return message[:300] or error.__class__.__name__
 
-    def select_auto_model(self, provider: str, user_id: Optional[str] = None) -> Dict[str, str]:
-        normalized = normalize_provider(provider)
-        api_key = get_ai_api_key(user_id, normalized)
+    def select_auto_model(self, user_id: Optional[str] = None) -> Dict[str, str]:
+        """Randomly select a registered active model with this user's provider configuration."""
+        if not user_id:
+            raise RuntimeError("Auto Provider requires a signed-in user or desktop identity")
+        session = SessionLocal()
         try:
-            candidates = self.list_available_models(normalized, user_id)
-        except Exception as inventory_error:
-            if normalized == "custom":
-                reason = self._safe_provider_error(inventory_error, api_key)
-                raise RuntimeError(f"Custom Provider model inventory failed: {reason}") from inventory_error
-            default_model = DEFAULT_PROVIDER_MODELS.get(normalized, self.default_model)
-            try:
-                self._probe_model_access(default_model, user_id, normalized)
-                return {"provider": normalized, "model": default_model}
-            except Exception as default_error:
-                inventory_reason = self._safe_provider_error(inventory_error, api_key)
-                default_reason = self._safe_provider_error(default_error, api_key)
-                raise RuntimeError(
-                    f"Auto model inventory failed for provider {normalized}: {inventory_reason}; "
-                    f"default model preflight failed: {default_reason}"
-                ) from default_error
-
-        candidates = list(dict.fromkeys(model_id for model_id in candidates if model_id))
+            configs = session.query(UserAIConfig).filter(UserAIConfig.userId == user_id).all()
+            configured_providers = {
+                normalize_provider(config.provider)
+                for config in configs
+                if config.apiKey and (
+                    normalize_provider(config.provider) != "custom"
+                    or (config.baseUrl or "").strip()
+                )
+            }
+            models = session.query(AIModel).filter(AIModel.isActive.is_(True)).all()
+            candidates = [
+                (model.modelId, normalize_provider(model.provider))
+                for model in models
+                if model.modelId and normalize_provider(model.provider) in configured_providers
+                and normalize_provider(model.provider) in SUPPORTED_PROVIDERS
+            ]
+        finally:
+            session.close()
+        if not candidates:
+            raise RuntimeError("No active AI models with a configured provider. Add a model and configure its provider in AI Settings.")
         random.shuffle(candidates)
         attempts = candidates[:AUTO_MODEL_MAX_ATTEMPTS]
         last_error = None
-        for model_id in attempts:
+        for model_id, provider in attempts:
             try:
-                self._probe_model_access(model_id, user_id, normalized)
-                return {"provider": normalized, "model": model_id}
+                self.validate_model_ready(model_id=model_id, user_id=user_id, provider=provider, probe_remote=True)
+                return {"provider": provider, "model": model_id}
             except Exception as error:
-                last_error = error
+                last_error = self._safe_provider_error(error, get_ai_api_key(user_id, provider))
 
-        reason = self._safe_provider_error(last_error or RuntimeError("no candidates"), api_key)
         raise RuntimeError(
-            f"Auto model selection failed for provider {normalized} after {len(attempts)} attempts: {reason}"
-        ) from last_error
+            f"Auto Provider selection failed after {len(attempts)} attempts: {last_error}"
+        )
 
     def status(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Reports local AI integration readiness without exposing secrets."""
