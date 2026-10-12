@@ -6,6 +6,7 @@ seed data used by the FastAPI application.
 """
 
 import json
+import os
 import uuid
 
 
@@ -171,14 +172,16 @@ def migrate_legacy_gateway_provider(engine):
             connection.exec_driver_sql(
                 '''
                 UPDATE user_ai_configs
-                SET provider = 'Custom'
+                SET provider = 'Custom',
+                    "baseUrl" = COALESCE(NULLIF(TRIM("baseUrl"), ''), ?)
                 WHERE LOWER(provider) = '9router'
                   AND NOT EXISTS (
                       SELECT 1 FROM user_ai_configs AS existing
                       WHERE existing."userId" = user_ai_configs."userId"
                         AND LOWER(existing.provider) = 'custom'
                   )
-                '''
+                ''',
+                (os.getenv("_9ROUTER_BASE_URL") or "http://127.0.0.1:20128/v1",),
             )
             connection.exec_driver_sql(
                 '''

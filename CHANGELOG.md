@@ -4,6 +4,10 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the effective legacy gateway endpoint when migrating AI configurations from 9router to Custom Provider. See [change-log/2026-10-12-2323-legacy-gateway-migration-url.md](change-log/2026-10-12-2323-legacy-gateway-migration-url.md).
+
 ### Removed
 
 - Root Claude context, legacy OpenCode configuration and obsolete safe-SQL research page. See [change-log/2026-10-11-0741-repository-context-cleanup.md](change-log/2026-10-11-0741-repository-context-cleanup.md).
