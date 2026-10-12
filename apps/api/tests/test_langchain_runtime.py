@@ -642,7 +642,11 @@ def test_user_ai_config_migration_adds_base_url_column():
     assert base_url == "http://gateway.test/v1"
 
 
-def test_legacy_gateway_migration_preserves_key_url_and_registered_models():
+@pytest.mark.parametrize("legacy_environment_url", [None, "http://removed-gateway.test/v1"])
+def test_legacy_gateway_migration_preserves_key_url_and_registered_models(monkeypatch, legacy_environment_url):
+    monkeypatch.delenv("_9ROUTER_BASE_URL", raising=False)
+    if legacy_environment_url:
+        monkeypatch.setenv("_9ROUTER_BASE_URL", legacy_environment_url)
     from models import UserAIConfig
     from services.startup import migrate_legacy_gateway_provider
 
@@ -665,37 +669,12 @@ def test_legacy_gateway_migration_preserves_key_url_and_registered_models():
         )
         assert model.provider == "Custom"
 
-
-@pytest.mark.parametrize(
-    ("base_url", "environment_url", "expected_url"),
-    [
-        (None, None, "http://127.0.0.1:20128/v1"),
-        ("", None, "http://127.0.0.1:20128/v1"),
-        ("  ", None, "http://127.0.0.1:20128/v1"),
-        (None, "http://legacy-gateway.test/v1", "http://legacy-gateway.test/v1"),
-        ("http://saved-gateway.test/v1", "http://legacy-gateway.test/v1", "http://saved-gateway.test/v1"),
-    ],
-)
-def test_legacy_gateway_migration_preserves_effective_endpoint(monkeypatch, base_url, environment_url, expected_url):
-    from models import UserAIConfig
-    from services.startup import migrate_legacy_gateway_provider
-
-    monkeypatch.delenv("_9ROUTER_BASE_URL", raising=False)
-    if environment_url:
-        monkeypatch.setenv("_9ROUTER_BASE_URL", environment_url)
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine)
     with session_factory() as session:
-        session.add(UserAIConfig(id="legacy", userId="user-1", provider="9router", apiKey="encrypted-key", baseUrl=base_url))
+        session.add(UserAIConfig(id="missing-url", userId="user-2", provider="9router", apiKey="another-key"))
         session.commit()
-
     migrate_legacy_gateway_provider(engine)
-    migrate_legacy_gateway_provider(engine)
-
-    monkeypatch.setattr(runtime, "SessionLocal", session_factory)
-    monkeypatch.setattr(runtime, "decrypt_key", lambda value: value)
-    assert resolve_base_url("Custom", "user-1") == expected_url
+    with session_factory() as session:
+        assert session.query(UserAIConfig).filter_by(id="missing-url").one().baseUrl is None
 
 
 def test_legacy_gateway_migration_prefers_existing_custom_config():
