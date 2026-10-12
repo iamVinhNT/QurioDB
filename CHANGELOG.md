@@ -16,6 +16,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Changed
 
+- Desktop package metadata and installer links now use version 0.1.5 for the macOS CI release. See [change-log/2026-10-12-2308-desktop-version-015.md](change-log/2026-10-12-2308-desktop-version-015.md).
 - AI chat supports MongoDB through its validated read-only agent and displays bounded query results immediately for every database type, with restored history and nested values. See [change-log/2026-10-10-2335-ai-mongodb-inline-results.md](change-log/2026-10-10-2335-ai-mongodb-inline-results.md).
 
 - Replace the legacy AI gateway choice with Custom Provider, validate base URLs and migrate saved configurations. See [change-log/2026-10-11-0741-custom-ai-provider.md](change-log/2026-10-11-0741-custom-ai-provider.md).
