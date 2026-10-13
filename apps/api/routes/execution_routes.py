@@ -4,16 +4,18 @@ execution_routes.py
 API routes for query execution, history management, and saved queries.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from deps import get_db
 from schemas.execution import (
+    DeleteQueryHistoryResponse,
     ExecuteQueryRequest,
     ExecuteQueryResponse,
     ExplainQueryRequest,
     ExplainQueryResponse,
     QueryHistoryResponse,
+    QueryHistoryPageResponse,
     SavedQueryResponse,
     SaveQueryRequest,
 )
@@ -78,11 +80,30 @@ def explain_query(data: ExplainQueryRequest, db: Session = Depends(get_db)):
     except Exception as exc:
         raise_http_error(exc)
 
-@execution_bp.get('/history', response_model=list[QueryHistoryResponse])
-def get_history(databaseId: str | None = None, db: Session = Depends(get_db)):
-    """Retrieves previous query execution history for the given user/database."""
+@execution_bp.get('/history', response_model=list[QueryHistoryResponse] | QueryHistoryPageResponse)
+def get_history(
+    databaseId: str | None = None,
+    q: str = "",
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    paginated: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Searches history and optionally returns a page, preserving legacy arrays."""
     try:
-        return execution_service.get_query_history(db, databaseId)
+        return execution_service.get_query_history(
+            db, databaseId, limit, offset=offset, q=q, paginated=paginated,
+        )
+    except Exception as exc:
+        raise_http_error(exc, allow_not_found=False)
+
+@execution_bp.delete('/history', response_model=DeleteQueryHistoryResponse)
+def delete_history(databaseId: str = Query(...), db: Session = Depends(get_db)):
+    """Permanently deletes query history for one explicitly selected database."""
+    if not databaseId.strip():
+        raise HTTPException(status_code=422, detail="Database ID must not be empty or whitespace-only.")
+    try:
+        return execution_service.delete_query_history(db, databaseId)
     except Exception as exc:
         raise_http_error(exc, allow_not_found=False)
 
