@@ -14,6 +14,25 @@ export interface SqlExecutionConfirmation {
   reason: string;
 }
 
+export interface QueryHistoryItem {
+  id: string;
+  sql: string;
+  status: string;
+  executionTime?: number | null;
+  errorMessage?: string | null;
+  databaseId?: string | null;
+  executedAt?: string | null;
+  created_on?: string | null;
+  database: { databaseName?: string };
+}
+
+export interface QueryHistoryPage {
+  items: QueryHistoryItem[];
+  hasMore: boolean;
+  nextOffset: number | null;
+  legacy?: boolean;
+}
+
 export const authNavigation = {
   navigate: (url: string) => {
     if (typeof window !== "undefined") {
@@ -198,6 +217,38 @@ export const databaseApi = {
   saveQuery: (data: any) => req(api.post("database/save-query", data)),
   getHistory: (databaseId?: string) =>
     req(api.get("database/history", { params: { databaseId } })),
+  getHistoryPage: async (
+    databaseId: string,
+    { q = "", limit = 50, offset = 0 }: {
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<QueryHistoryPage> => {
+    const response: QueryHistoryPage | QueryHistoryItem[] = await req(
+      api.get("database/history", {
+        params: { databaseId, q, limit, offset, paginated: true },
+      }),
+    );
+    if (!Array.isArray(response)) return response;
+    const search = q.trim().toLowerCase();
+    return {
+      items: response.filter(
+        (item) =>
+          item.sql.toLowerCase().includes(search) ||
+          (item.database.databaseName || "").toLowerCase().includes(search),
+      ),
+      hasMore: false,
+      nextOffset: null,
+      legacy: true,
+    };
+  },
+  deleteHistory: (databaseId: string): Promise<{ deletedCount: number }> => {
+    if (!databaseId.trim()) {
+      return Promise.reject(new Error("Select a database before deleting history."));
+    }
+    return req(api.delete("database/history", { params: { databaseId } }));
+  },
   listSavedQueries: (databaseId?: string, userId?: string) =>
     req(api.get("database/saved-queries", { params: { databaseId, userId } })),
   getSavedQueries: (databaseId: string, userId: string) =>
