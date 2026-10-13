@@ -6,7 +6,7 @@ Query History previously loaded only 50 rows and searched that small client-side
 
 The default GET response remains the existing array. New clients opt into a paging envelope. A new UI connected to an old sidecar detects the array, searches only the latest 50 returned rows, and shows that limitation. Unsupported deletion fails visibly without clearing history.
 
-The fixed contract, Peer candidates and Lead acceptance, cleanup, and recovery evidence are recorded in [the work-status document](2026-10-14-query-history-work-status.md). Candidate branch: `iamVinhNT/slp-history-recovery`, worktree `/home/vinhnt/orca/workspaces/QurioDB/slp-history-recovery`, original base `dev` at `38e75d1437fbc1b598812c4f162fe879c2183a0a`.
+The fixed contract, Peer candidates and Lead acceptance, cleanup, and recovery evidence are recorded in [the work-status document](2026-10-14-query-history-work-status.md). Candidate branch: `iamVinhNT/query-history-final`, worktree `/home/vinhnt/DEV/QurioDB-history-final`, original base `dev` at `38e75d1437fbc1b598812c4f162fe879c2183a0a`.
 
 ## Files changed
 
@@ -35,4 +35,15 @@ API Peer also passed 46 nearby SQL-policy, AI-policy, saved-query and NoSQL regr
 
 Dev verification uses temporary SQLite metadata and targets; no user data is mutated. Baseline olderneedle search reproduced the 50-row limit. New Web against the old running backend showed the latest-50 limitation, required the health/AI confirmation, and displayed unsupported DELETE failure while retaining history.
 
-Recovery verification and the merged browser acceptance are pending and will be recorded before delivery. The original integration checkout/branch disappeared during verification for an unproven reason; Supervisor authorized recovery from preserved integrated commit c2c81a7. Both Peer worktrees/branches remain intact, API terminal preserved by Orca as user-owned, Web terminal released with transcript archive, zero reclaimable workers. No push or merge to dev.
+Final checkout checks:
+
+- From apps/api: `/home/vinhnt/DEV/QurioDB/apps/api/venv/bin/python -m pytest tests/test_execution.py` — 37 passed in 2.78s, 342 dependency/model deprecation warnings.
+- From apps/web: `VITE_API_URL= bunx vitest run tests/lib/api-client-history.test.ts tests/components/sqllab/sql-lab-history-panel.test.tsx tests/services/api-client.test.ts tests/lib/api-client-confirmation.test.ts tests/lib/runtime-api.test.ts` — 47 passed across five files in 11.72s.
+- From apps/web: `bunx tsc --noEmit` — exit 0. `git diff --check` — clean.
+- Browser on `bun run dev`, UI port 3001/API port 5127: search found original olderneedle beyond latest 50; three UI executions refreshed history automatically; Load more expanded 50 to 57 and disappeared at end; refresh reset the page; search reset returned all four matching rows. Cancel left 58 entries intact; confirmed delete removed 58 despite an active search and emptied the panel. GET and raw metadata SQL verified selected database 0 rows, other database 1 row. Dialog text and screenshot were visually inspected. Evidence: `/tmp/quriodb-history-verification/browser-verification.json` and `/home/vinhnt/DEV/QurioDB/.playwright-mcp/query-history-delete-confirmation.png`.
+
+All requested browser flows were verified. Packaged desktop app, sidecar build and desktop startup/nonce-health/API-URL/shutdown remain deliberately unverified per user decision.
+
+Both Orca-managed integration checkouts and their branches disappeared externally around 00:50:13 and 00:54:20; cause remains unproven. Supervisor authorized reconstruction from preserved commit 57d76f1 in a plain Git worktree outside Orca storage and rerunning final checks. Both Peer worktrees/branches remain intact; API terminal preserved by Orca as user-owned, Web terminal released with transcript archive, zero reclaimable workers. No push or merge to dev.
+
+Dev verification processes were stopped after acceptance. Temporary local env files and the untracked API venv symlink were removed; ignored node_modules links remain for review. Main user edits and dev HEAD remain unchanged.

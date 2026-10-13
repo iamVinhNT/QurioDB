@@ -1,7 +1,7 @@
 # Query History implementation contract and work status
 
 Base: `dev` at `38e75d1437fbc1b598812c4f162fe879c2183a0a`.
-Integration: `/home/vinhnt/orca/workspaces/QurioDB/slp-history-recovery`, branch `iamVinhNT/slp-history-recovery` (recovered from integrated commit `c2c81a7`).
+Final integration: `/home/vinhnt/DEV/QurioDB-history-final`, branch `iamVinhNT/query-history-final` (recovered from `57d76f1`, retaining original base `38e75d1`).
 Lead child Run: `run_b15a087a38d7`. Lead owns this status document and final changelog. API and Web Peers own separate child worktrees and relinquish ownership with their candidate reports.
 
 ## Fixed API contract
@@ -25,8 +25,8 @@ Lead child Run: `run_b15a087a38d7`. Lead owns this status document and final cha
 
 ## Acceptance and status
 
-- API Peer: pending dispatch; owns routes/execution_routes.py, services/execution, schemas/execution.py, tests/test_execution.py.
-- Web Peer: pending dispatch; owns api-client.ts, SQLLabHistoryPanel.tsx and related Web tests.
+- API Peer: completed, ownership relinquished; owned routes/execution_routes.py, services/execution, schemas/execution.py, tests/test_execution.py.
+- Web Peer: completed, ownership relinquished; owned api-client.ts, SQLLabHistoryPanel.tsx and related Web tests.
 - Lead: record candidate decisions, integrate commits, run API execution tests, related Web tests and TypeScript checks; exercise isolated browser dev if available. Never touch main worktree user edits.
 - Sidecar rebuild deliberately skipped per user decision; packaged desktop app unverified. No push or merge to dev.
 
@@ -43,3 +43,16 @@ Lead child Run: `run_b15a087a38d7`. Lead owns this status document and final cha
 - Supervisor explicitly authorized reconstruction on a new isolated branch. Recovered `c2c81a730c2fa1acc7e075e8fce583bdc13f3247` into this worktree and restored Lead changelogs. No push, merge to dev, or edits to main user files; preserve all worktrees until final report.
 - Original merged candidate: 37 API tests and TypeScript passed; Web first run 45/47 because local dev VITE_API_URL=5127 contaminated two default-URL expectations, then 47/47 passed with VITE_API_URL cleared. Recovery reruns and browser acceptance are recorded in the detail changelog before final delivery.
 - Isolated dev: `bun run dev`, UI 3001/API 5127 on loopback, metadata `/tmp/quriodb-history-verification/metadata.db` and two temporary SQLite targets. Executed 55 safe SELECTs for selected database and 1 control query for another. Baseline browser search could not find olderneedle outside the latest 50. New Web with still-running baseline backend displayed the latest-50 limit; confirmed unsupported DELETE returned Method Not Allowed visibly and retained history.
+
+## Final acceptance
+
+- A second external removal affected slp-history-recovery and its branch around local 00:54:20, without any further release/worktree operations from Lead. Git object 57d76f1 preserved code and restored logs; backed up to `/tmp/quriodb-history-verification/recovered-candidate-with-logs.patch`. Cause of both removals remains unproven; Supervisor reports both former paths contain only Vite-recreated `.vite` data and confirmed no removal by Supervisor.
+- Supervisor explicitly authorized plain `git worktree add` outside Orca storage. Created this home-directory worktree from 57d76f1 on a new local branch. Both Peer branches/worktrees and main dev/user changes remain intact. No further removals or worktree releases.
+- Final API acceptance: from apps/api, `/home/vinhnt/DEV/QurioDB/apps/api/venv/bin/python -m pytest tests/test_execution.py` — 37 passed in 2.78s (342 dependency/model deprecation warnings).
+- Final Web acceptance: from apps/web, `VITE_API_URL= bunx vitest run tests/lib/api-client-history.test.ts tests/components/sqllab/sql-lab-history-panel.test.tsx tests/services/api-client.test.ts tests/lib/api-client-confirmation.test.ts tests/lib/runtime-api.test.ts` — 47 passed across five files in 11.72s. Clear VITE_API_URL only for tests so the isolated dev URL does not change default-URL expectations.
+- `bunx tsc --noEmit` — exit 0; `git diff --check` — clean. Candidate code is unchanged from the passing merged Peer implementations; final commits update logs only.
+- Browser on `bun run dev` (UI port 3001/API port 5127, temporary SQLite data): search found original olderneedle beyond latest 50; Open in Editor plus three Run clicks saved query executions and refreshed history automatically. Load more expanded 50 to 57 rows (7980px virtual list) and removed the exhausted-page button; refresh restored first-page Load more. Search reset returned all four matching olderneedle rows after executions.
+- Confirmation displayed selected database name/ID, deletion beyond current search, health stats and AI-context effects. Cancel preserved all 58 rows. Confirmed delete returned 58 and panel became No Query History with and without search; GET and raw SQLite counts verified selected DB 0, other DB 1. Confirmation screenshot was visually inspected at `/home/vinhnt/DEV/QurioDB/.playwright-mcp/query-history-delete-confirmation.png`; numeric evidence `/tmp/quriodb-history-verification/browser-verification.json`.
+- Lead ACCEPTS the integrated code after merged test and browser evidence. No outstanding code failures. Packaged desktop, frozen sidecar build and desktop startup/nonce health/dynamic URL/shutdown remain deliberately unverified; no rebuild per user decision. Offset-concurrency and ASCII-search limits are retained.
+
+Dev verification processes were stopped after acceptance. Temporary local env files and the untracked API venv symlink were removed; ignored node_modules links remain for review. Main user edits and dev HEAD remain unchanged.
