@@ -36,7 +36,7 @@ Lead added an integrated regression exercising actual Auto selection and the rea
 
 Worker settlements succeeded. Release receipts for both writers preserve runtime-recorded `user_owned`/`retained` terminals with reason `user_takeover` and `processAction: none`; Lead does not override user ownership. A monitoring gap occurred before direct user `retry`; durable settlements and candidates were recovered after runtime restart.
 
-Independent immutable review and final verification remain pending. No live provider calls or packaged desktop startup, health, API URL or shutdown checks were performed. Conversation state lasts the API process lifetime, simultaneous cold probes may duplicate, and the simple global conversation preflight lock can contend under parallel traffic.
+Final review and verification are recorded below. No live provider calls or packaged desktop startup, health, API URL or shutdown checks were performed. Conversation state lasts the API process lifetime, simultaneous cold probes may duplicate, and the simple global conversation preflight lock can contend under parallel traffic.
 
 ## Independent review and repair
 
@@ -44,8 +44,25 @@ Claude sonnet reviewer P3 (`task_ffc8d534dace` / `ctx_1bb109b2bc00`) reviewed im
 
 All review notes have dispositions. The outer provider message is now considered when its cause is unrelated, with a regression. Provider SDK errors, including model request rejection, continue to count as provider/model failures only at the provider-call boundary, consistent with automatic failover authorization. The global preflight lock and process-lifetime conversation memory are accepted desktop tradeoffs; revisit per-conversation locks or lifecycle cleanup if observed contention or memory growth requires it. Existing connection/credential redaction now also applies to stream errors, preserving Mongo redaction after the new interception path; a regression verifies URI/password/API-key removal in events and logs. No SQL safety or RAG code was changed. The reviewer reported an app-module import initialized `~/.quriodb`; no live provider use or data inspection was requested or performed by Lead.
 
-Post-repair verification and final immutable review are pending. The first credential-redaction assertion expected a particular placeholder; repeated safe-provider sanitization may omit bracketed text, so the corrected assertion checks preserved error meaning and absence of secrets rather than placeholder formatting.
+Post-repair verification and final immutable review are recorded below. The first credential-redaction assertion expected a particular placeholder; repeated safe-provider sanitization may omit bracketed text, so the corrected assertion checks preserved error meaning and absence of secrets rather than placeholder formatting.
 
 ## Revised delivery authorization
 
 The completion audit relayed the user's explicit final local `dev` delivery and cleanup request in message `msg_75af69926e79`. This replaces the original parent-edit/dev-commit restriction only for final local integration; no push remains authorized. Lead will deliver the accepted candidate into `/home/vinhnt/DEV/QurioDB` and verify there, preserving unrelated edits. The parent checkout is currently clean at `e2feb296`; the pre-existing CSV detail blob is `e503a11eeba9616b7f05fb02b483001ae63283fa` and remains outside the candidate diff. Audit owns cleanup of task-created workspaces after Lead settlement; Lead must not remove its active worktree.
+
+## Final ACCEPT and delivery evidence
+
+Lead ACCEPTS immutable code candidate `76ccac084f9270291c387bcae4a38a8a15ca79d7`. Fresh Claude sonnet P4 (`task_a96ec44e3062` / `ctx_bc32db95a1a1`) re-reviewed the repair against `327d1f1`, passed all six narrow regressions and reported no actionable findings. All P3 findings are resolved or explicitly accepted as documented desktop tradeoffs; no implementation work remains. Both reviews used a provider different from the Codex writers and Lead repair.
+
+Commands ran from `apps/api` with `PATH=/home/vinhnt/DEV/QurioDB/apps/api/venv/bin:$PATH`:
+
+- `python -m pytest tests/test_auto_provider_models.py tests/test_ai_stream_model_readiness.py tests/test_ai_chat_persistence.py`: **73 passed** after repair in Lead and again after local `dev` delivery.
+- `python -m pytest -m rag`: **219 passed, 454 deselected** after repair in Lead and again after local `dev` delivery. The expected baseline **166** passed before changes; **53 new RAG-marked regressions** account for the increase.
+- `python -m pytest tests/test_ai_stream_model_readiness.py -k 'sanitized_preflight or outer_message or connection_credentials'`: **6 passed**, independently confirmed by P4.
+- Integrated conversation/readiness regression: passed; second message at 299.999 seconds made no extra remote probe, and exactly 300 seconds repeated the probe while retaining the selected pair.
+- Additional Mongo/action/stream route/parser/history suite before the review repair: **103 passed**. P3 independently passed **84** provider/stream/cache tests and **213** pre-repair RAG tests.
+- `git diff --check`: passed. Only seven scoped paths differ from original base; no web, RAG implementation, SQL-policy/safety or schema changes. No unresolved test failures; dependency/datetime deprecation warnings remain.
+
+The clean parent `dev` checkout was fast-forwarded from `e2feb296` to accepted code `76ccac0` and reverified with both required commands. Its CSV detail blob remains exactly `e503a11eeba9616b7f05fb02b483001ae63283fa`. This final documentation-only evidence commit is delivered by a second fast-forward without changing tested API code. No push occurred.
+
+All four Peer Tasks/Dispatches settled successfully and their deliveries were processed and acknowledged. All release receipts retain user-taken-over terminals with `processAction: none`; `worker-list --run run_d17a46a91aae --terminal-state reclaimable` returns zero. The completion audit is the explicit next owner for closing these user-owned terminals and removing task-created workspaces after Lead settlement, preserving candidate refs and this report in the parent checkout. Sidecar rebuild and packaged desktop behavior remain unverified as requested.
