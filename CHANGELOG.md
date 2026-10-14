@@ -4,6 +4,10 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- CSV export now honors encoding bytes, adds Unicode BOMs for Excel, rejects unrepresentable text, and protects formula cells while preserving valid numbers. See [change-log/2026-10-13-2359-csv-export-encoding-safety.md](change-log/2026-10-13-2359-csv-export-encoding-safety.md).
+
 ### Removed
 
 - Undo the review-added 9router endpoint fallback; Custom Provider continues to require an explicitly configured base URL. See [change-log/2026-10-12-2327-remove-legacy-gateway-fallback.md](change-log/2026-10-12-2327-remove-legacy-gateway-fallback.md).

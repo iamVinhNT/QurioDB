@@ -88,14 +88,11 @@ export function ExportGovernanceCard({ settings, updateData }: ExportGovernanceC
                 <SelectItem value="ISO-8859-1">ISO-8859-1</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex items-center gap-2 pt-1">
-              <Switch 
-                checked={settings.includeBOM || false} 
-                onCheckedChange={(c) => updateData({ includeBOM: !!c })}
-                className="scale-75 origin-left" 
-              />
-              <span className="text-[10px] text-muted-foreground">Include Byte Order Mark (BOM)</span>
-            </div>
+            <p className="text-[10px] text-muted-foreground pt-1">
+              UTF-8 and UTF-16 LE CSV exports include a BOM for Excel.
+              ASCII and ISO-8859-1 exports require representable characters;
+              use UTF-8 or UTF-16 LE for Vietnamese text.
+            </p>
           </div>
         </div>
 

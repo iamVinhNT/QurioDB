@@ -1,4 +1,47 @@
+import { toast } from "sonner";
+
 export type ExportFormat = "csv" | "xlsx";
+
+const encodeCsv = (text: string, encoding: string) => {
+  switch (encoding.toUpperCase()) {
+    case "UTF-8":
+      // Excel detects UTF-8 reliably when the file starts with a BOM.
+      return new Blob([new TextEncoder().encode(`\uFEFF${text}`)], {
+        type: "text/csv;charset=utf-8",
+      });
+    case "UTF-16":
+    case "UTF-16LE": {
+      const bytes = new Uint8Array(2 + text.length * 2);
+      const view = new DataView(bytes.buffer);
+      view.setUint16(0, 0xfeff, true);
+      for (let i = 0; i < text.length; i++) {
+        view.setUint16(2 + i * 2, text.charCodeAt(i), true);
+      }
+      return new Blob([bytes], { type: "text/csv;charset=utf-16le" });
+    }
+    case "ASCII":
+    case "ISO-8859-1": {
+      const limit = encoding.toUpperCase() === "ASCII" ? 0x7f : 0xff;
+      const bytes = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code > limit) {
+          throw new RangeError(
+            `${encoding} cannot represent all exported characters. Choose UTF-8 or UTF-16 LE in Settings.`,
+          );
+        }
+        bytes[i] = code;
+      }
+      return new Blob([bytes], {
+        type: `text/csv;charset=${limit === 0x7f ? "us-ascii" : "iso-8859-1"}`,
+      });
+    }
+    default:
+      throw new RangeError(
+        `Unsupported CSV encoding: ${encoding}. Choose an encoding in Settings.`,
+      );
+  }
+};
 
 const formatCellValue = (value: unknown) => {
   if (value === null || value === undefined) return "";
@@ -8,6 +51,16 @@ const formatCellValue = (value: unknown) => {
 
 const escapeCsvCell = (value: unknown) => {
   const text = String(formatCellValue(value));
+  const isNumber =
+    (typeof value === "number" && Number.isFinite(value)) ||
+    /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text);
+  // Quote the protective TAB so Excel treats dangerous text as a text cell.
+  if (
+    !isNumber &&
+    (/^[\s]*[=+\-@＝＋－＠]/u.test(text) || /^\s*[\t\r\n]/.test(text))
+  ) {
+    return `"\t${text.replace(/"/g, '""')}"`;
+  }
   if (!/[",\r\n]/.test(text)) return text;
   return `"${text.replace(/"/g, '""')}"`;
 };
@@ -24,9 +77,7 @@ const downloadCsv = (
       columns.map((column) => escapeCsvCell(row[column])).join(","),
     ),
   ];
-  const blob = new Blob([rows.join("\r\n")], {
-    type: `text/csv;charset=${encoding}`,
-  });
+  const blob = encodeCsv(rows.join("\r\n"), encoding);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -48,7 +99,12 @@ export const exportData = async (
   }
 
   if (format === "csv") {
-    downloadCsv(data, columns, filename, encoding);
+    try {
+      downloadCsv(data, columns, filename, encoding);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      toast.error(error.message);
+    }
     return;
   }
 
