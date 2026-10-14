@@ -337,10 +337,14 @@ class LangChainRuntime:
         message = re.sub(r"\s+(?:-\s+)?[\{\[].*$", " [upstream response omitted]", message)
         return message[:300] or error.__class__.__name__
 
-    def select_auto_model(self, user_id: Optional[str] = None) -> Dict[str, str]:
+    def select_auto_model(
+        self, user_id: Optional[str] = None,
+        excluded_models: Optional[Iterable[tuple[str, str]]] = None,
+    ) -> Dict[str, str]:
         """Randomly select a registered active model with this user's provider configuration."""
         if not user_id:
             raise RuntimeError("Auto Provider requires a signed-in user or desktop identity")
+        excluded_models = {(model, normalize_provider(provider)) for model, provider in (excluded_models or ())}
         session = SessionLocal()
         try:
             configs = session.query(UserAIConfig).filter(UserAIConfig.userId == user_id).all()
@@ -358,6 +362,7 @@ class LangChainRuntime:
                 for model in models
                 if model.modelId and normalize_provider(model.provider) in configured_providers
                 and normalize_provider(model.provider) in SUPPORTED_PROVIDERS
+                and (model.modelId, normalize_provider(model.provider)) not in excluded_models
             ]
         finally:
             session.close()

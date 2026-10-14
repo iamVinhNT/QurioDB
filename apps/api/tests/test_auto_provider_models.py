@@ -140,3 +140,18 @@ def test_auto_does_not_use_other_users_configuration(registry):
 def test_auto_requires_user_identity(registry):
     with pytest.raises(RuntimeError, match="requires a signed-in user or desktop identity"):
         runtime.LangChainRuntime().select_auto_model()
+
+
+def test_auto_excludes_failed_pairs_with_normalized_provider(registry, monkeypatch):
+    subject = runtime.LangChainRuntime()
+    probes = []
+    monkeypatch.setattr(subject, "_probe_model_access", lambda model_id, user_id, provider: probes.append((model_id, provider)))
+    assert subject.select_auto_model("user-1", excluded_models={("saved-google", "Google Gemini")}) == {"provider": "custom", "model": "saved-custom"}
+    assert probes == [("saved-custom", "custom")]
+
+
+def test_auto_exhausted_exclusions_do_not_probe(registry, monkeypatch):
+    subject = runtime.LangChainRuntime()
+    monkeypatch.setattr(subject, "_probe_model_access", lambda *args: pytest.fail("Excluded pairs must not be retried"))
+    with pytest.raises(RuntimeError, match="No active AI models"):
+        subject.select_auto_model("user-1", excluded_models={("saved-google", "google"), ("saved-custom", "custom")})

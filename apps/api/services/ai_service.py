@@ -7,13 +7,20 @@ Specialized AI service delegator that coordinates multiple AI strategies
 import logging
 import json
 import re
+from contextvars import ContextVar
+from threading import RLock
 from typing import Dict, Any, Optional
 
 from .ai.sql import SqlAIService
 from .ai.agent import AgentAIService
 from .ai.context import schema_context_service
 from .ai.feedback_context import feedback_context_service
-from .ai.langchain_runtime import langchain_runtime
+from .ai.langchain_runtime import (
+    AUTO_MODEL_MAX_ATTEMPTS, get_ai_api_key, langchain_runtime, normalize_provider,
+)
+from .ai.base import MONGODB_RESPONSE_POLICY
+from .ai.mongodb_query import redact_mongo_sensitive_text
+from models import AIModel, SessionLocal
 from .ai.prompt_contracts import build_rag_prompt
 from .ai.retrieval.pipeline import rag_pipeline_service
 from .ai.sql_execution import sql_execution_verifier
@@ -30,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 RESPONSE_START_STATUS = "Đang chuẩn bị phản hồi..."
 MODEL_PREFLIGHT_STATUS = "Đang kiểm tra model và hạn mức..."
+_stream_selection = ContextVar("ai_stream_selection", default=None)
+
 SQL_PREVIEW_INTENTS = {"text_to_sql", "sql_repair", "sql_optimize"}
 
 
@@ -41,7 +50,8 @@ class AIService(SqlAIService, AgentAIService):
 
     def __init__(self):
         super().__init__()
-        # Additional startup logic if needed
+        self._auto_conversations = {}
+        self._auto_conversations_lock = RLock()
         logger.info("AIService initialized with multi-strategy delegation.")
 
     # --- Schema Context methods (Delegated to schema_context_service) ---
@@ -93,6 +103,169 @@ class AIService(SqlAIService, AgentAIService):
 
     # --- Streaming Logic ---
     def stream_generate_response(
+        self, prompt: str, db_id: Optional[str] = None, schema: str = "public",
+        model_id: Optional[str] = None, task_key: Optional[str] = None,
+        user_id: Optional[str] = None, history: Optional[list] = None,
+        conv_id: Optional[str] = None,
+    ):
+        state = {"auto": not model_id, "user_id": user_id, "conv_id": conv_id,
+                 "failed": set(), "provider_failures": 0, "model": model_id, "provider": None}
+        stream = self._stream_generate_response(
+            prompt, db_id, schema, model_id, task_key, user_id, history, conv_id,
+        )
+        try:
+            while True:
+                # SSE generators can resume in different thread-pool contexts.
+                token = _stream_selection.set(state)
+                try:
+                    event = next(stream)
+                except StopIteration:
+                    return
+                finally:
+                    _stream_selection.reset(token)
+                yield event
+        except Exception as error:
+            safe_error = self._safe_stream_error(error, state)
+            logger.warning("AI streaming failed: %s", safe_error)
+            yield "error", safe_error
+        finally:
+            stream.close()
+
+    def _safe_stream_error(self, error, state):
+        key = get_ai_api_key(state["user_id"], state["provider"]) if state.get("provider") else None
+        return langchain_runtime._safe_provider_error(error, key)
+
+    def _remember_auto_model(self, state, selection):
+        state.update(model=selection["model"], provider=normalize_provider(selection["provider"]))
+        if state["conv_id"]:
+            with self._auto_conversations_lock:
+                self._auto_conversations[(state["user_id"], state["conv_id"])] = (
+                    state["model"], state["provider"],
+                )
+
+    def _select_stream_model(self, state):
+        # ponytail: serialize preflight; use per-conversation locks if contention matters.
+        with self._auto_conversations_lock:
+            key = (state["user_id"], state["conv_id"])
+            saved = self._auto_conversations.get(key) if state["conv_id"] else None
+            if saved and saved not in state["failed"]:
+                model_id, provider = saved
+                session = SessionLocal()
+                try:
+                    eligible = any(
+                        normalize_provider(model.provider) == provider
+                        for model in session.query(AIModel).filter(
+                            AIModel.modelId == model_id, AIModel.isActive.is_(True),
+                        ).all()
+                    )
+                finally:
+                    session.close()
+                if eligible:
+                    state.update(model=model_id, provider=provider)
+                    try:
+                        langchain_runtime.validate_model_ready(
+                            model_id=model_id, user_id=state["user_id"], provider=provider,
+                            probe_remote=True,
+                        )
+                        return
+                    except Exception as error:
+                        if self._is_provider_failure(error):
+                            langchain_runtime.invalidate_model_probe(state["user_id"], provider, model_id)
+                            state["failed"].add((model_id, provider))
+                self._auto_conversations.pop(key, None)
+            kwargs = {"user_id": state["user_id"]}
+            if state["failed"]:
+                kwargs["excluded_models"] = set(state["failed"])
+            self._remember_auto_model(state, langchain_runtime.select_auto_model(**kwargs))
+
+    def _is_provider_failure(self, error, depth=0):
+        cause = error.__cause__
+        if cause is not None and depth < 3:
+            return self._is_provider_failure(cause, depth + 1)
+        status = getattr(error, "status_code", None) or getattr(error, "code", None)
+        if isinstance(status, int) and (status in {401, 403, 404, 408, 429} or status >= 500):
+            return True
+        if isinstance(error, (TimeoutError, ConnectionError)):
+            return True
+        module = type(error).__module__
+        if module.startswith(("openai", "anthropic", "google.api_core", "google.genai", "httpx")):
+            return True
+        return isinstance(error, RuntimeError) and bool(re.search(
+            r"quota|rate.?limit|resource.?exhausted|model.{0,40}(?:access|not found|unavailable)|"
+            r"provider.{0,40}(?:failed|unavailable)|connection|timed? ?out",
+            str(error), re.IGNORECASE,
+        ))
+
+    def _recover_provider_failure(self, error, state, interrupted=False):
+        safe_error = self._safe_stream_error(error, state)
+        if not self._is_provider_failure(error):
+            raise RuntimeError(safe_error) from None
+        langchain_runtime.invalidate_model_probe(state["user_id"], state["provider"], state["model"])
+        if not state["auto"]:
+            raise RuntimeError(safe_error) from None
+        state["failed"].add((state["model"], state["provider"]))
+        state["provider_failures"] += 1
+        if state["conv_id"]:
+            with self._auto_conversations_lock:
+                key = (state["user_id"], state["conv_id"])
+                if self._auto_conversations.get(key) == (state["model"], state["provider"]):
+                    self._auto_conversations.pop(key, None)
+        if state["provider_failures"] >= AUTO_MODEL_MAX_ATTEMPTS:
+            raise RuntimeError(f"Auto Provider exhausted after {AUTO_MODEL_MAX_ATTEMPTS} provider failures: {safe_error}") from None
+        try:
+            self._select_stream_model(state)
+        except Exception as selection_error:
+            raise RuntimeError(f"Auto Provider has no eligible fallback: {self._safe_stream_error(selection_error, state)}") from None
+        if interrupted:
+            raise RuntimeError("AI response interrupted by a provider failure; the next message will use an eligible fallback.") from None
+
+    def _stream_model_text(self, buffered=False, **kwargs):
+        state = _stream_selection.get()
+        if state is None:
+            yield from langchain_runtime.stream_text(**kwargs)
+            return
+        state["stream_output"] = False
+        while True:
+            kwargs.update(model_id=state["model"], provider=state["provider"])
+            try:
+                stream = langchain_runtime.stream_text(**kwargs)
+                if buffered:
+                    response = "".join(stream)
+                    yield response
+                else:
+                    yield from stream
+                return
+            except Exception as error:
+                self._recover_provider_failure(error, state, interrupted=state["stream_output"])
+                if not buffered:
+                    state["parser"] = TaggedResponseStreamParser()
+
+    def _invoke_model_text(self, **kwargs):
+        state = _stream_selection.get()
+        if state is None:
+            return langchain_runtime.invoke_text(**kwargs)
+        while True:
+            kwargs.update(model_id=state["model"], provider=state["provider"])
+            try:
+                return langchain_runtime.invoke_text(**kwargs)
+            except Exception as error:
+                self._recover_provider_failure(error, state)
+
+    def _generate_response(self, combined_prompt, model_id=None, user_id=None,
+                           task_key=None, db_id=None, database_type=None):
+        if _stream_selection.get() is None:
+            return super()._generate_response(combined_prompt, model_id, user_id, task_key, db_id, database_type)
+        is_mongodb = (database_type or "").lower() == "mongodb"
+        scope = "MongoDB-focused" if is_mongodb else "SQL-focused"
+        policy = MONGODB_RESPONSE_POLICY if is_mongodb else VIETNAMESE_RESPONSE_POLICY
+        if is_mongodb:
+            combined_prompt = redact_mongo_sensitive_text(combined_prompt)
+        return self._invoke_model_text(
+            system_prompt=f"You are QurioDB's {scope} AI assistant.\n{policy}",
+            prompt=combined_prompt, model_id=model_id, user_id=user_id,
+        )
+
+    def _stream_generate_response(
         self,
         prompt: str,
         db_id: Optional[str] = None,
@@ -115,16 +288,18 @@ class AIService(SqlAIService, AgentAIService):
         try:
             if model_id:
                 provider = langchain_runtime.resolve_provider(model_id=model_id, user_id=user_id)
+                _stream_selection.get().update(model=model_id, provider=provider)
                 langchain_runtime.validate_model_ready(
                     model_id=model_id, user_id=user_id, provider=provider, probe_remote=True,
                 )
             else:
-                selection = langchain_runtime.select_auto_model(user_id=user_id)
-                model_id = selection["model"]
-                provider = selection["provider"]
+                self._select_stream_model(_stream_selection.get())
+                model_id = _stream_selection.get()["model"]
+                provider = _stream_selection.get()["provider"]
         except Exception as readiness_error:
-            logger.warning("AI model readiness check failed before streaming: %s", readiness_error)
-            yield "error", str(readiness_error)
+            safe_error = self._safe_stream_error(readiness_error, _stream_selection.get())
+            logger.warning("AI model readiness check failed before streaming: %s", safe_error)
+            yield "error", safe_error
             return
 
         quick_response = self._quick_general_response(prompt)
@@ -162,7 +337,8 @@ class AIService(SqlAIService, AgentAIService):
         if is_mongodb_request:
             if task_key in {"sql.explain", "sql.optimize"}:
                 instruction = "Explain" if task_key == "sql.explain" else "Suggest optimizations for"
-                response = "".join(langchain_runtime.stream_text(
+                response = "".join(self._stream_model_text(
+                    buffered=True,
                     system_prompt=(
                         "You are QurioDB's MongoDB query assistant.\n"
                         f"{VIETNAMESE_RESPONSE_POLICY}\n"
@@ -238,25 +414,12 @@ class AIService(SqlAIService, AgentAIService):
             system_prompt = get_sql_explanation_prompt(prompt)
         stream_prompt = "Analyze the supplied SQL." if resolved_task_key in {"sql.explain", "sql.optimize"} else prompt
 
-        try:
-            langchain_history = history
-            if conv_id and not langchain_history:
-                langchain_history = self._load_langchain_history(conv_id)
+        langchain_history = history
+        if conv_id and not langchain_history:
+            langchain_history = self._load_langchain_history(conv_id)
 
-            if db_id and getattr(understanding, "intent", "") in SQL_PREVIEW_INTENTS:
-                yield from self._stream_sql_with_preview_repair(
-                    system_prompt=system_prompt,
-                    prompt=stream_prompt,
-                    db_id=db_id,
-                    model_id=model_id,
-                    user_id=user_id,
-                    provider=provider,
-                    history=langchain_history,
-                )
-                return
-
-            parser = TaggedResponseStreamParser()
-            for chunk in langchain_runtime.stream_text(
+        if db_id and getattr(understanding, "intent", "") in SQL_PREVIEW_INTENTS:
+            yield from self._stream_sql_with_preview_repair(
                 system_prompt=system_prompt,
                 prompt=stream_prompt,
                 db_id=db_id,
@@ -264,17 +427,26 @@ class AIService(SqlAIService, AgentAIService):
                 user_id=user_id,
                 provider=provider,
                 history=langchain_history,
-            ):
-                for event, parsed_chunk in parser.feed(chunk):
-                    yield event, parsed_chunk
-            for event, parsed_chunk in parser.flush():
-                yield event, parsed_chunk
+            )
             return
-        except Exception as langchain_error:
-            logger.warning("LangChain streaming failed: %s", langchain_error)
 
-        provider = langchain_runtime.resolve_provider(model_id=model_id, user_id=user_id)
-        yield "error", f"LangChain streaming failed for provider {provider}"
+        state = _stream_selection.get()
+        state["parser"] = TaggedResponseStreamParser()
+        for chunk in self._stream_model_text(
+            system_prompt=system_prompt,
+            prompt=stream_prompt,
+            db_id=db_id,
+            model_id=model_id,
+            user_id=user_id,
+            provider=provider,
+            history=langchain_history,
+        ):
+            for event, parsed_chunk in state["parser"].feed(chunk):
+                _stream_selection.get()["stream_output"] = True
+                yield event, parsed_chunk
+        for event, parsed_chunk in state["parser"].flush():
+            yield event, parsed_chunk
+        return
 
     def _stream_sql_with_preview_repair(
         self,
@@ -295,7 +467,8 @@ class AIService(SqlAIService, AgentAIService):
         for attempt in range(max_retries + 1):
             if attempt == 0:
                 yield "thinking", "Đang tạo SQL..."
-                response = "".join(langchain_runtime.stream_text(
+                response = "".join(self._stream_model_text(
+                    buffered=True,
                     system_prompt=system_prompt,
                     prompt=current_prompt,
                     db_id=db_id,
@@ -306,7 +479,7 @@ class AIService(SqlAIService, AgentAIService):
                 ))
             else:
                 yield "thinking", f"Bản chạy thử thất bại; đang sửa SQL ({attempt}/{max_retries})..."
-                response = langchain_runtime.invoke_text(
+                response = self._invoke_model_text(
                     system_prompt=system_prompt,
                     prompt=current_prompt,
                     db_id=db_id,
