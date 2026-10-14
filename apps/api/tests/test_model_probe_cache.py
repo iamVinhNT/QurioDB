@@ -231,3 +231,33 @@ def test_effective_environment_url_change_forces_new_probe(cache, monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "https://second.invalid/v1")
     validate(subject, provider="OpenAI")
     assert len(probes) == 2
+
+
+def test_conversation_second_message_reuses_probe_until_exact_ttl(cache, monkeypatch):
+    from types import SimpleNamespace
+    import services.ai_service as service
+
+    subject, factory, clock, probes = cache
+    monkeypatch.setattr(service, "langchain_runtime", subject)
+    monkeypatch.setattr(service, "SessionLocal", factory)
+    monkeypatch.setattr(subject, "stream_text", lambda **kwargs: iter(["A model response."]))
+    monkeypatch.setattr(service.rag_pipeline_service, "understand_query", lambda *args, **kwargs: SimpleNamespace(needs_retrieval=False))
+    chat = service.AIService()
+    monkeypatch.setattr(chat, "_quick_general_response", lambda prompt: None)
+    monkeypatch.setattr(chat, "_load_langchain_history", lambda conversation: [])
+
+    def message():
+        events = list(chat.stream_generate_response("Explain joins", user_id="user", conv_id="conversation"))
+        assert "".join(text for kind, text in events if kind == "message") == "A model response."
+        assert not any(kind == "error" for kind, _ in events)
+
+    message()
+    assert len(probes) == 1
+    clock[0] += 299.999
+    message()
+    assert len(probes) == 1
+    assert chat._auto_conversations[("user", "conversation")] == ("model", "custom")
+    clock[0] = 400.0
+    message()
+    assert len(probes) == 2
+    assert chat._auto_conversations[("user", "conversation")] == ("model", "custom")
