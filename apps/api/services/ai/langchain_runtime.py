@@ -7,6 +7,7 @@ and message conversion so route/service code can stay focused on product logic.
 """
 
 import logging
+import hashlib
 import json
 import os
 import random
@@ -80,6 +81,8 @@ SUPPORTED_PROVIDERS = tuple(DEFAULT_PROVIDER_MODELS.keys())
 MODEL_INVENTORY_TTL_SECONDS = 60
 MODEL_INVENTORY_TIMEOUT_SECONDS = 5
 AUTO_MODEL_MAX_ATTEMPTS = 3
+MODEL_PROBE_TTL_SECONDS = 300
+MODEL_PROBE_CACHE_MAX_ENTRIES = 512
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 def _read_user_ai_config(user_id: Optional[str]) -> Dict[str, Optional[str]]:
@@ -229,6 +232,9 @@ class LangChainRuntime:
         self.default_model = default_model
         self._model_inventory_cache = {}
         self._model_inventory_lock = Lock()
+        self._model_probe_cache = {}
+        self._model_probe_lock = Lock()
+        self._model_probe_pending = {}
         ensure_langsmith_environment()
 
     @property
@@ -411,6 +417,7 @@ class LangChainRuntime:
             try:
                 model = session.query(AIModel).filter(AIModel.modelId == model_id).first()
                 if model and not getattr(model, "isActive", True):
+                    self.invalidate_model_probe(user_id, target_provider, target_model)
                     raise RuntimeError(f"AI model '{model_id}' is inactive. Activate it in AI Settings before streaming.")
             finally:
                 session.close()
@@ -419,18 +426,67 @@ class LangChainRuntime:
             raise RuntimeError("Anthropic integration is not installed")
 
         api_key = get_ai_api_key(user_id, target_provider)
-        if target_provider == "custom" and not resolve_base_url(target_provider, user_id):
+        base_url = resolve_base_url(target_provider, user_id) if self.is_openai_compatible_provider(target_provider) else None
+        if target_provider == "custom" and not base_url:
+            self.invalidate_model_probe(user_id, target_provider, target_model)
             raise RuntimeError("Custom Provider requires a Base URL in AI Settings")
         if not api_key:
+            self.invalidate_model_probe(user_id, target_provider, target_model)
             raise RuntimeError(f"Missing {target_provider} API key. Configure environment variables or AI Settings.")
 
+        fingerprint = hashlib.sha256(json.dumps([
+            api_key, base_url or (OPENAI_DEFAULT_BASE_URL if self.is_openai_compatible_provider(target_provider) else ""),
+        ]).encode("utf-8")).digest()
+        cache_key = (user_id, target_provider, target_model)
+        with self._model_probe_lock:
+            now = time.monotonic()
+            for key, (completed_at, _) in list(self._model_probe_cache.items()):
+                if now - completed_at >= MODEL_PROBE_TTL_SECONDS:
+                    del self._model_probe_cache[key]
+            cached = self._model_probe_cache.get(cache_key)
+            if cached and cached[1] != fingerprint:
+                del self._model_probe_cache[cache_key]
+                cached = None
+            pending = self._model_probe_pending.get(cache_key)
+            if pending and pending[1] != fingerprint:
+                del self._model_probe_pending[cache_key]
+            token = object()
+            if probe_remote and not cached:
+                # Dropping a pending token only skips caching its eventual success.
+                if cache_key not in self._model_probe_pending and len(self._model_probe_pending) >= MODEL_PROBE_CACHE_MAX_ENTRIES:
+                    del self._model_probe_pending[next(iter(self._model_probe_pending))]
+                self._model_probe_pending[cache_key] = (token, fingerprint)
+
         if probe_remote:
-            self._probe_model_access(target_model, user_id, target_provider)
+            if not cached:
+                try:
+                    self._probe_model_access(target_model, user_id, target_provider)
+                except Exception as exc:
+                    self.invalidate_model_probe(user_id, target_provider, target_model)
+                    raise RuntimeError(self._safe_provider_error(exc, api_key)) from None
+                completed_at = time.monotonic()
+                with self._model_probe_lock:
+                    pending = self._model_probe_pending.get(cache_key)
+                    if pending and pending[0] is token:
+                        del self._model_probe_pending[cache_key]
+                        self._model_probe_cache.pop(cache_key, None)
+                        self._model_probe_cache[cache_key] = (completed_at, fingerprint)
+                        while len(self._model_probe_cache) > MODEL_PROBE_CACHE_MAX_ENTRIES:
+                            oldest = min(self._model_probe_cache, key=lambda key: self._model_probe_cache[key][0])
+                            del self._model_probe_cache[oldest]
 
         return {"provider": target_provider, "model": target_model}
 
+    def invalidate_model_probe(self, user_id: Optional[str], provider: str, model_id: str) -> None:
+        """Remove the exact positive contradicted by a provider/model error."""
+        with self._model_probe_lock:
+            key = (user_id, normalize_provider(provider), model_id)
+            self._model_probe_cache.pop(key, None)
+            self._model_probe_pending.pop(key, None)
+
     def _probe_model_access(self, model_id: str, user_id: Optional[str], provider: str) -> None:
         """Performs a minimal provider call to catch quota, rate limit, and model access errors."""
+        api_key = get_ai_api_key(user_id, provider)
         try:
             model = self.build_model(
                 model_id=model_id,
@@ -446,7 +502,8 @@ class LangChainRuntime:
             config = {"metadata": {**langsmith_metadata(user_id=user_id), "preflight": "true"}}
             model.invoke(messages, config=config)
         except Exception as exc:
-            raise RuntimeError(f"AI model preflight failed for provider {provider}: {exc}") from exc
+            error = self._safe_provider_error(exc, api_key)
+            raise RuntimeError(f"AI model preflight failed for provider {provider}: {error}") from None
 
     def build_model(
         self,
