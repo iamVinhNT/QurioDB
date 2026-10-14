@@ -478,3 +478,49 @@ def test_concurrent_first_messages_select_one_stable_pair(stable_chat):
         results = list(executor.map(lambda _: send_chat(), range(2)))
     assert all(("message", "response") in events for events in results)
     selector.assert_called_once()
+
+
+@pytest.mark.parametrize("status", [401, 404, 429, 503])
+def test_real_sanitized_preflight_failure_excludes_sticky_pair(stable_chat, mocker, status):
+    (_, selector, _), validate, invalidate, _ = stable_chat
+    send_chat()
+    model = mocker.MagicMock()
+    model.invoke.side_effect = RuntimeError(f"Error code: {status} - {{'upstream': 'provider-secret'}}")
+    mocker.patch.object(langchain_runtime, "build_model", return_value=model)
+    mocker.patch("services.ai.langchain_runtime.get_ai_api_key", return_value="provider-secret")
+
+    def actual_preflight(**kwargs):
+        langchain_runtime._probe_model_access(kwargs["model_id"], kwargs["user_id"], kwargs["provider"])
+
+    validate.side_effect = actual_preflight
+    selector.return_value = {"model": "fallback", "provider": "custom"}
+    events = send_chat()
+    assert selector.call_args.kwargs["excluded_models"] == {("saved-model", "custom")}
+    invalidate.assert_called_once_with("user-1", "custom", "saved-model")
+    model.invoke.assert_called_once()
+    assert not any(kind == "error" for kind, _ in events)
+    assert "provider-secret" not in str(events)
+
+
+def test_provider_error_outer_message_survives_unrelated_cause(stable_chat):
+    (_, selector, stream), _, invalidate, _ = stable_chat
+    set_fallback(selector)
+    error = RuntimeError("model access denied")
+    error.__cause__ = ValueError("response decoding failed")
+    stream.side_effect = [error, iter(["response"])]
+    assert ("message", "response") in send_chat()
+    invalidate.assert_called_once()
+
+
+def test_stream_error_redacts_connection_credentials(stable_chat, mocker, caplog):
+    (_, _, stream), _, _, _ = stable_chat
+    mocker.patch.object(langchain_runtime, "resolve_provider", return_value="custom")
+    stream.side_effect = RuntimeError("quota exceeded at mongodb://alice:database-secret@db.test/orders password=other-secret for provider-secret")
+    events = send_chat(model_id="saved-model")
+    assert events[-1][0] == "error"
+    assert "quota exceeded" in events[-1][1]
+    combined = str(events) + caplog.text
+    assert "provider-secret" not in combined
+    assert "database-secret" not in combined
+    assert "other-secret" not in combined
+    assert "mongodb://" not in combined

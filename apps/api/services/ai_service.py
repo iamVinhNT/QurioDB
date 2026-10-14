@@ -133,7 +133,8 @@ class AIService(SqlAIService, AgentAIService):
 
     def _safe_stream_error(self, error, state):
         key = get_ai_api_key(state["user_id"], state["provider"]) if state.get("provider") else None
-        return langchain_runtime._safe_provider_error(error, key)
+        safe_error = langchain_runtime._safe_provider_error(error, key)
+        return redact_mongo_sensitive_text(safe_error)
 
     def _remember_auto_model(self, state, selection):
         state.update(model=selection["model"], provider=normalize_provider(selection["provider"]))
@@ -179,9 +180,12 @@ class AIService(SqlAIService, AgentAIService):
             self._remember_auto_model(state, langchain_runtime.select_auto_model(**kwargs))
 
     def _is_provider_failure(self, error, depth=0):
+        # Preflight deliberately removes upstream causes to avoid exposing secrets.
+        if isinstance(error, RuntimeError) and str(error).startswith("AI model preflight failed for provider "):
+            return True
         cause = error.__cause__
-        if cause is not None and depth < 3:
-            return self._is_provider_failure(cause, depth + 1)
+        if cause is not None and depth < 3 and self._is_provider_failure(cause, depth + 1):
+            return True
         status = getattr(error, "status_code", None) or getattr(error, "code", None)
         if isinstance(status, int) and (status in {401, 403, 404, 408, 429} or status >= 500):
             return True
