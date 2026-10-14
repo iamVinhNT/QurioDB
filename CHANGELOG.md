@@ -15,6 +15,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Added
 
+- SQL Lab Query History supports server-side search, load-more pagination, and confirmed deletion for the selected database. See [change-log/2026-10-14-0040-query-history-search-pagination-delete.md](change-log/2026-10-14-0040-query-history-search-pagination-delete.md).
 - Native macOS CI builds for Apple Silicon and Intel, with sidecar readiness checks and DMG/application release assets. See [change-log/2026-10-12-2304-macos-ci-builds.md](change-log/2026-10-12-2304-macos-ci-builds.md).
 - Project documentation under `docs/architecture/` (9 docs) and `docs/modules/` (9 docs) with an index in `docs/README.md`. See [change-log/2026-10-10-2220-docs-architecture-modules.md](change-log/2026-10-10-2220-docs-architecture-modules.md).
 - Change log process: `CHANGELOG.md` plus per-change detail files in `change-log/`. See [change-log/2026-10-10-2219-agents-changelog-rules.md](change-log/2026-10-10-2219-agents-changelog-rules.md).

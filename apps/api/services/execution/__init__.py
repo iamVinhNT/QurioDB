@@ -11,6 +11,7 @@ import uuid
 import logging
 
 from ..base_service import BaseDatabaseService
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from models import Db, QueryHistory, SavedQuery
@@ -189,30 +190,62 @@ class ExecutionService(BaseDatabaseService):
             logger.error(f"Failed to save query: {e}")
             raise
 
-    def get_query_history(self, session: Session, database_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        """Retrieves and serializes query execution history, optionally filtered by database."""
+    def get_query_history(
+        self,
+        session: Session,
+        database_id: Optional[str] = None,
+        limit: int = 50,
+        *,
+        offset: int = 0,
+        q: str = "",
+        paginated: bool = False,
+    ) -> List[Dict[str, Any]] | Dict[str, Any]:
+        """Searches before paging and retains the existing history item fields."""
+        query = session.query(QueryHistory)
+        if database_id:
+            query = query.filter(QueryHistory.databaseId == database_id)
+        search = q.strip()
+        if search:
+            pattern = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            query = query.outerjoin(Db, QueryHistory.databaseId == Db.id).filter(or_(
+                QueryHistory.sql.ilike(pattern, escape="\\"),
+                Db.databaseName.ilike(pattern, escape="\\"),
+            ))
+        history = query.order_by(
+            QueryHistory.created_on.desc(), QueryHistory.id.desc(),
+        ).offset(offset).limit(limit + 1 if paginated else limit).all()
+        has_more = paginated and len(history) > limit
+        history = history[:limit]
+
+        db_ids = {h.databaseId for h in history if h.databaseId}
+        db_map = {
+            db.id: db.databaseName for db in session.query(Db).filter(Db.id.in_(db_ids)).all()
+        } if db_ids else {}
+        items = [{
+            "id": h.id, "sql": h.sql, "status": h.status,
+            "executionTime": h.executionTime, "errorMessage": h.errorMessage,
+            "databaseId": h.databaseId, "executedAt": h.executedAt.isoformat() if h.executedAt else None,
+            "created_on": h.created_on.isoformat() if h.created_on else None,
+            "database": {"databaseName": db_map.get(h.databaseId, "Unknown")}
+        } for h in history]
+        if paginated:
+            return {"items": items, "hasMore": has_more, "nextOffset": offset + len(items) if has_more else None}
+        return items
+
+    def delete_query_history(self, session: Session, database_id: str) -> Dict[str, int]:
+        """Deletes only the selected database's history in a single transaction."""
+        if not database_id or not database_id.strip():
+            raise ValueError("Database ID must not be empty or whitespace-only.")
         try:
-            query = session.query(QueryHistory).order_by(QueryHistory.created_on.desc())
-            if database_id:
-                query = query.filter(QueryHistory.databaseId == database_id)
-            
-            history = query.limit(limit).all()
-            
-            # Efficiently map database names for the front-end display
-            db_ids = list(set(h.databaseId for h in history if h.databaseId))
-            db_map = {db.id: db.databaseName for db in session.query(Db).filter(Db.id.in_(db_ids)).all()} if db_ids else {}
-            
-            return [{
-                "id": h.id, "sql": h.sql, "status": h.status,
-                "executionTime": h.executionTime, "errorMessage": h.errorMessage,
-                "databaseId": h.databaseId, "executedAt": h.executedAt.isoformat() if h.executedAt else None,
-                "created_on": h.created_on.isoformat() if h.created_on else None,
-                "database": {"databaseName": db_map.get(h.databaseId, "Unknown")}
-            } for h in history]
-        except Exception as e:
-            logger.error(f"Failed to retrieve history: {e}")
-            return []
-            
+            deleted_count = session.query(QueryHistory).filter(
+                QueryHistory.databaseId == database_id,
+            ).delete(synchronize_session=False)
+            session.commit()
+            return {"deletedCount": deleted_count}
+        except Exception:
+            session.rollback()
+            raise
+
     def list_saved_queries(self, session: Session, database_id: Optional[str] = None, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Lists saved queries, optionally filtered by database or user ownership."""
         try:

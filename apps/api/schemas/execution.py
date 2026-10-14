@@ -84,3 +84,13 @@ class QueryHistoryResponse(BaseModel):
     executedAt: Optional[str] = None
     created_on: Optional[str] = None
     database: Dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryHistoryPageResponse(BaseModel):
+    items: List[QueryHistoryResponse]
+    hasMore: bool
+    nextOffset: Optional[int] = None
+
+
+class DeleteQueryHistoryResponse(BaseModel):
+    deletedCount: int
