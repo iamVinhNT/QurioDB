@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Header } from '@/components/header';
 import { Providers } from '@/components/providers';
 import { AuthGuard } from '@/components/auth/auth-guard';
@@ -16,6 +16,11 @@ interface LazyPages {
   SettingsPage: React.LazyExoticComponent<React.ComponentType>;
   SqlLabPage: React.LazyExoticComponent<React.ComponentType>;
   UnauthorizedPage: React.LazyExoticComponent<React.ComponentType>;
+}
+
+function LegacyKnowledgeRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/settings/ai${location.pathname}${location.search}${location.hash}`} replace />;
 }
 
 function createPages(): LazyPages {
@@ -51,6 +56,12 @@ function App() {
                   <Route path="/auth/login" element={<pages.LoginPage />} />
                   <Route path="/auth/register" element={<pages.RegisterPage />} />
                   <Route path="/connections" element={<pages.ConnectionsPage />} />
+                  <Route path="/settings/ai/knowledge" element={<pages.SettingsPage />} />
+                  <Route path="/settings/ai/knowledge/:knowledgeBaseId" element={<pages.SettingsPage />} />
+                  <Route path="/settings/ai/knowledge/:knowledgeBaseId/documents/:documentId" element={<pages.SettingsPage />} />
+                  <Route path="/knowledge" element={<LegacyKnowledgeRedirect />} />
+                  <Route path="/knowledge/:knowledgeBaseId" element={<LegacyKnowledgeRedirect />} />
+                  <Route path="/knowledge/:knowledgeBaseId/documents/:documentId" element={<LegacyKnowledgeRedirect />} />
                   <Route path="/settings" element={<pages.SettingsPage />} />
                   <Route path="/sqllab" element={<pages.SqlLabPage />} />
                   <Route path="/unauthorized" element={<pages.UnauthorizedPage />} />

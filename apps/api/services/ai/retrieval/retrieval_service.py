@@ -37,6 +37,8 @@ class RagRetrievalService:
         source_types: Optional[List[str]] = None,
         top_k: int = 8,
         candidate_limit: int = 32,
+        schema_name: Optional[str] = None,
+        knowledge_base_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Returns ranked chunks, citations, and a safe retrieval trace."""
         started = time.perf_counter()
@@ -48,14 +50,15 @@ class RagRetrievalService:
 
         session = SessionLocal()
         try:
-            rows = self._load_candidate_rows(session, database_id, user_id, source_types)
+            rows = self._load_candidate_rows(session, database_id, user_id, source_types, schema_name, knowledge_base_id)
             if not rows:
                 return self._empty_result(query_text, database_id, started)
 
+            embedding_gateway = self.embeddings.for_user(user_id) if isinstance(self.embeddings, GeminiEmbeddingGateway) else self.embeddings
             expanded_terms = expand_query_terms(query_text)
             lexical_scores = {
                 chunk.id: lexical_score(query_text, expanded_terms, chunk.content)
-                for source, chunk, _embedding in rows
+                for source, chunk in rows
             }
             semantic_scores = self._semantic_scores(
                 session,
@@ -65,14 +68,15 @@ class RagRetrievalService:
                 user_id=user_id,
                 source_types=source_types,
                 candidate_limit=candidate_limit,
+                embedding_gateway=embedding_gateway,
             )
             candidate_budget = max(top_k, candidate_limit)
             fused = fuse_scores(semantic_scores, lexical_scores)[:candidate_budget]
-            row_by_chunk_id = {chunk.id: (source, chunk, embedding) for source, chunk, embedding in rows}
+            row_by_chunk_id = {chunk.id: (source, chunk) for source, chunk in rows}
 
             results = []
             for chunk_id, score in fused:
-                source, chunk, _embedding = row_by_chunk_id[chunk_id]
+                source, chunk = row_by_chunk_id[chunk_id]
                 terms = matched_terms(expanded_terms, chunk.content)
                 reasons = build_reasons(chunk.objectName or source.title, terms, chunk.content)
                 results.append(RagRetrievalResult(
@@ -104,6 +108,7 @@ class RagRetrievalService:
                 started,
                 candidate_budget=candidate_budget,
                 ranked_candidate_count=len(results),
+                embedding_gateway=embedding_gateway,
             )
             return {
                 "items": [self._result_to_dict(result) for result in reranked_results],
@@ -130,6 +135,9 @@ class RagRetrievalService:
             if user_id:
                 query = query.filter((RagSource.userId == user_id) | (RagSource.userId.is_(None)))
 
+            from services.knowledge_access import active_source_ids
+            allowed = active_source_ids(session, user_id, database_id)
+
             return [{
                 "id": source.id,
                 "sourceType": source.sourceType,
@@ -141,7 +149,7 @@ class RagRetrievalService:
                 "status": source.status,
                 "indexed_on": source.indexed_on.isoformat() if source.indexed_on else None,
                 "changed_on": source.changed_on.isoformat() if source.changed_on else None,
-            } for source in query.all()]
+            } for source in query.all() if source.sourceType != "knowledge_document" or source.id in allowed]
         finally:
             session.close()
 
@@ -152,6 +160,10 @@ class RagRetrievalService:
             source = session.get(RagSource, source_id)
             if not source or not self._can_access_source(source, user_id):
                 return None
+            if source.sourceType == "knowledge_document":
+                from services.knowledge_access import active_source_ids
+                if source.id not in active_source_ids(session, user_id, source.databaseId):
+                    return None
             chunks = session.query(RagChunk).filter(RagChunk.sourceId == source_id).order_by(RagChunk.ordinal.asc()).all()
             return {
                 "id": source.id,
@@ -186,6 +198,14 @@ class RagRetrievalService:
                 return {"deleted": False, "reason": "not_found"}
             if not self._can_access_source(source, user_id):
                 return {"deleted": False, "reason": "forbidden"}
+
+            if source.sourceType == "knowledge_document":
+                from models import KnowledgeDocument, KnowledgeRevision
+                from services.knowledge_service import KnowledgeService
+                revision = session.get(KnowledgeRevision, source.id.removeprefix("knowledge:"))
+                document = session.get(KnowledgeDocument, revision.documentId) if revision else None
+                if document:
+                    KnowledgeService._unpublish(session, document)
 
             sqlite_vec_store.delete_source(session, source_id)
             chunk_ids = session.query(RagChunk.id).filter(RagChunk.sourceId == source_id)
@@ -229,10 +249,11 @@ class RagRetrievalService:
         database_id: Optional[str],
         user_id: Optional[str],
         source_types: Optional[List[str]],
+        schema_name: Optional[str] = None,
+        knowledge_base_id: Optional[str] = None,
     ):
-        query = session.query(RagSource, RagChunk, RagEmbedding)\
+        query = session.query(RagSource, RagChunk)\
             .join(RagChunk, RagChunk.sourceId == RagSource.id)\
-            .outerjoin(RagEmbedding, RagEmbedding.chunkId == RagChunk.id)\
             .filter(RagSource.status == "indexed")
         if database_id:
             query = query.filter(RagSource.databaseId == database_id)
@@ -240,9 +261,24 @@ class RagRetrievalService:
             query = query.filter(RagSource.sourceType.in_(source_types))
         if user_id:
             query = query.filter((RagSource.userId == user_id) | (RagSource.userId.is_(None)))
+        from sqlalchemy import or_, not_
+        from services.knowledge_access import active_source_ids
+        if not source_types or "knowledge_document" in source_types:
+            allowed = active_source_ids(session, user_id, database_id, knowledge_base_id)
+            query = query.filter(or_(RagSource.sourceType != "knowledge_document", RagSource.id.in_(allowed)))
+        if schema_name:
+            query = query.filter(or_(RagChunk.schemaName.is_(None), RagChunk.schemaName == "", RagChunk.schemaName == schema_name))
+            # JSON array membership is evaluated by SQLite before chunks enter Python.
+            from sqlalchemy import func, select
+            schemas = func.json_each(RagChunk.metadataJson, "$.schemas").table_valued("value").alias("schemas")
+            query = query.filter(or_(RagSource.sourceType != "knowledge_document",
+                not_(select(1).select_from(schemas).exists()),
+                select(1).select_from(schemas).where(schemas.c.value == schema_name).exists()))
         return query.all()
 
     def _can_access_source(self, source: RagSource, user_id: Optional[str]) -> bool:
+        if source.sourceType == "knowledge_document":
+            return bool(user_id and source.userId == user_id)
         return not source.userId or not user_id or source.userId == user_id
 
     def _semantic_scores(
@@ -254,11 +290,13 @@ class RagRetrievalService:
         user_id: Optional[str] = None,
         source_types: Optional[List[str]] = None,
         candidate_limit: int = 32,
+        embedding_gateway=None,
     ) -> Dict[str, float]:
-        if not self.embeddings.is_available():
+        embedding_gateway = embedding_gateway or self.embeddings
+        if not embedding_gateway.is_available():
             return {}
 
-        query_vector = self.embeddings.embed_query(query_text)
+        query_vector = embedding_gateway.embed_query(query_text)
         if not query_vector:
             return {}
 
@@ -269,11 +307,12 @@ class RagRetrievalService:
             user_id=user_id,
             source_types=source_types,
             k=max(candidate_limit, 32),
+            candidate_chunk_ids=[chunk.id for _source, chunk in rows],
         )
         if not sqlite_vec_scores:
             return {}
 
-        candidate_chunk_ids = {chunk.id for _source, chunk, _embedding in rows}
+        candidate_chunk_ids = {chunk.id for _source, chunk in rows}
         return {
             chunk_id: score
             for chunk_id, score in sqlite_vec_scores.items()
@@ -290,8 +329,9 @@ class RagRetrievalService:
         started,
         candidate_budget: int,
         ranked_candidate_count: int,
+        embedding_gateway=None,
     ) -> Dict[str, Any]:
-        embeddings_available = self.embeddings.is_available()
+        embeddings_available = (embedding_gateway or self.embeddings).is_available()
         return {
             "intent": query_text,
             "databaseId": database_id,
@@ -340,6 +380,7 @@ class RagRetrievalService:
     def _result_to_dict(self, result: RagRetrievalResult) -> Dict[str, Any]:
         return {
             **result.to_trace_item(),
+            "metadata": result.metadata,
             "content": result.content,
             "citation": result.to_citation(),
         }

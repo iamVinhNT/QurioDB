@@ -56,16 +56,18 @@ class AIService(SqlAIService, AgentAIService):
 
     # --- Schema Context methods (Delegated to schema_context_service) ---
     
-    def _format_schema_context(self, db_id: str, schema: str, intent: Optional[str] = None) -> str:
-        """Proxies schema context formatting to the specialized context service."""
-        return schema_context_service.format_schema_context(db_id, schema, intent=intent)
+    def _format_schema_context(self, db_id: str, schema: str, intent: Optional[str] = None, user_id: Optional[str] = None) -> str:
+        """Use common SQL evidence; retain MongoDB's trusted field contract."""
+        if str(SchemaMetadataSource().get_db_type(db_id)).lower() == "mongodb":
+            return schema_context_service.format_schema_context(db_id, schema, intent=intent)
+        return rag_pipeline_service.build_sql_context(intent or "", db_id, schema, user_id=user_id).context
 
     # --- Autocomplete Task ---
 
     def autocomplete_sql(self, db_id: str, schema: str, prefix: str, suffix: str, user_id: Optional[str] = None, model_id: Optional[str] = None) -> Dict[str, Any]:
         """Provides fast inline SQL autocomplete using Gemini."""
         try:
-            context = self._format_schema_context(db_id, schema, intent=f"{prefix} ... {suffix}")
+            context = self._format_schema_context(db_id, schema, intent=f"{prefix} ... {suffix}", user_id=user_id)
 
             system_instruction = (
                 "You are a fast, precise SQL coding assistant for inline autocomplete.\n"
@@ -228,6 +230,8 @@ class AIService(SqlAIService, AgentAIService):
         if state is None:
             yield from langchain_runtime.stream_text(**kwargs)
             return
+        for name, value in (state.get("generation_options") or {}).items():
+            kwargs.setdefault(name, value)
         state["stream_output"] = False
         while True:
             kwargs.update(model_id=state["model"], provider=state["provider"])
@@ -248,6 +252,8 @@ class AIService(SqlAIService, AgentAIService):
         state = _stream_selection.get()
         if state is None:
             return langchain_runtime.invoke_text(**kwargs)
+        for name, value in (state.get("generation_options") or {}).items():
+            kwargs.setdefault(name, value)
         while True:
             kwargs.update(model_id=state["model"], provider=state["provider"])
             try:
@@ -333,6 +339,10 @@ class AIService(SqlAIService, AgentAIService):
             "agent.mongodb_readonly" if is_mongodb_request
             else "chat.database" if is_database_request else "chat.general"
         )
+
+        state = _stream_selection.get()
+        if state is not None:
+            state["generation_options"] = task_model_router.generation_options(resolved_task_key, user_id, db_id)
 
         # Yield clean text. Frontend will handle wrapping for the UI steps.
         yield "thinking", RESPONSE_START_STATUS

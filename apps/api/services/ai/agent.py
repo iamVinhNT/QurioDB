@@ -20,6 +20,7 @@ from models import SessionLocal
 
 from .base import BaseAIService
 from .context import normalize_database_type, schema_context_service
+from .retrieval.pipeline import rag_pipeline_service
 from .langchain_runtime import END, START, StateGraph, langchain_runtime
 from .mongodb_query import (
     MongoQueryPolicy,
@@ -434,7 +435,7 @@ class AgentAIService(BaseAIService):
         return agent_res
 
     def _agent_prepare_node(self, state: AgentGraphState) -> AgentGraphState:
-        context_result = schema_context_service.build_schema_context(state["db_id"], state.get("schema") or "public", intent=state["prompt"])
+        context_result = rag_pipeline_service.build_sql_context(state["prompt"], state["db_id"], state.get("schema") or "public", user_id=state.get("user_id"), deep=True)
         system_prompt = get_agent_prompt(context_result.context)
         conv_context = self._context_mgr.build_context_for_agent(state.get("conv_id"), state["prompt"])
         if conv_context:
@@ -531,7 +532,7 @@ class AgentAIService(BaseAIService):
 
     def _execute_agent_legacy(self, prompt: str, db_id: str, schema: str = "public", user_id: Optional[str] = None, model_id: Optional[str] = None, conv_id: Optional[str] = None) -> Dict[str, Any]:
         """Legacy loop used when LangGraph is unavailable or graph execution fails."""
-        context_result = schema_context_service.build_schema_context(db_id, schema, intent=prompt)
+        context_result = rag_pipeline_service.build_sql_context(prompt, db_id, schema, user_id=user_id, deep=True)
         system_prompt = get_agent_prompt(context_result.context)
         
         # Load conversation history for context awareness

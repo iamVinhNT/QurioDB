@@ -234,6 +234,16 @@ class RagPipelineService:
         """Builds the retrieval context after model readiness has passed."""
         return rag_context_builder.build(understanding, user_id=user_id)
 
+    def build_sql_context(self, query, database_id, schema="public", user_id=None, *, deep=False):
+        """Known SQL tasks reuse retrieval without an extra classification request."""
+        understanding = QueryUnderstanding(
+            intent="text_to_sql", retrieval_query=query, needs_retrieval=bool(database_id),
+            source_types=["database_schema", "saved_query", "query_history", "knowledge_document"],
+            database_id=database_id, schema=schema or "public", behavior="sql_coding",
+            rag_mode="deep" if deep else "shallow", reasoning_mode="normal",
+        )
+        return self.build_context_for_understanding(understanding, user_id=user_id)
+
     def sync_database(
         self,
         database_id: str,
@@ -255,6 +265,9 @@ class RagPipelineService:
             schema=schema or "public",
             user_id=user_id,
         )
+        schema_result = results["sources"]["database_schema"]
+        results["graph"] = {"status": "synced" if schema_result["status"] == "indexed" else schema_result["status"],
+                            "snapshotHash": schema_result.get("snapshotHash")}
         if include_saved_queries:
             results["sources"]["saved_query"] = self.index_service.index_saved_queries(
                 database_id,
@@ -265,6 +278,7 @@ class RagPipelineService:
                 database_id,
                 include_failed=include_failed_history,
                 limit=query_history_limit,
+                user_id=user_id,
             )
 
         results["summary"] = self._sync_summary(results["sources"])

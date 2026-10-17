@@ -30,6 +30,7 @@ describe("AISettingsSectionRail", () => {
     expect(screen.getByRole("tab", { name: /task routing/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /router terms/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /rag index/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /knowledge base/i })).toBeInTheDocument();
   });
 
   it("notifies parent when a section is selected", async () => {

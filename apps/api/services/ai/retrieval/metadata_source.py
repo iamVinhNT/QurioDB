@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 class SchemaMetadataSource:
     """Reads schema metadata while isolating provider failures from AI chat."""
 
+    def get_schema_snapshot(self, database_id: str, schema: str):
+        """Read one complete snapshot; failures must preserve the last good index."""
+        from .schema_graph import reflect_schema
+        return reflect_schema(database_id, schema)
+
     def get_all_columns(self, database_id: str, schema: str) -> Dict[str, List[Dict[str, Any]]]:
         """Fetches table columns without letting metadata errors disable chat."""
         try:

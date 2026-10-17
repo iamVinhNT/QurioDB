@@ -11,10 +11,9 @@ import datetime
 import hashlib
 from typing import Dict, Any, Optional
 
-from models import AIChatMessage, AIConversation, AIGeneratedQuery, RagRetrievalEvent, SessionLocal, UserAIConfig
+from models import AIChatMessage, AIConversation, AIGeneratedQuery, RagRetrievalEvent, SessionLocal
 from ..conversation_context import ConversationContextManager
-from routes.ai_config import decrypt_key
-from .langchain_runtime import get_ai_api_key, langchain_runtime
+from .langchain_runtime import langchain_runtime
 from .mongodb_query import redact_mongo_sensitive_payload, redact_mongo_sensitive_text
 from .task_model_router import task_model_router
 from ..prompts import VIETNAMESE_RESPONSE_POLICY
@@ -26,27 +25,6 @@ MONGODB_RESPONSE_POLICY = """### LANGUAGE POLICY
 - Write user-visible text in Vietnamese with diacritics by default.
 - Keep MongoDB code, identifiers, keywords, citation ids, provider names, and tool names in their required original form.
 """
-
-def _get_system_api_key() -> Optional[str]:
-    """Fetches the Google/Gemini API key from encrypted DB settings."""
-    api_key = get_ai_api_key(provider="google")
-    if api_key:
-        return api_key
-
-    session = SessionLocal()
-    try:
-        config = (
-            session.query(UserAIConfig)
-            .filter(UserAIConfig.provider.in_(["Google", "Google Gemini", "Gemini", "google", "gemini"]))
-            .first()
-        )
-        if config and config.apiKey:
-            return decrypt_key(config.apiKey)
-    except Exception as e:
-        logger.warning(f"Failed to load Gemini DB key: {e}")
-    finally:
-        session.close()
-    return None
 
 class BaseAIService:
     """Provides foundational AI operations and persistence."""
@@ -81,6 +59,7 @@ class BaseAIService:
                 model_id=model_id,
                 user_id=user_id,
                 provider=provider,
+                **task_model_router.generation_options(task_key, user_id, db_id),
             )
         except Exception as e:
             logger.warning("LangChain generation failed for provider %s: %s", provider, e)

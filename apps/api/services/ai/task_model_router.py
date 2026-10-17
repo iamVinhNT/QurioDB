@@ -198,6 +198,19 @@ class TaskModelRouter:
             return ResolvedTaskModel(model_id=assignment.fallbackModelId, source="fallback")
         return ResolvedTaskModel(model_id=None, source="default")
 
+    def generation_options(self, task_key, user_id, database_id=None):
+        """Task tuning applies independently of explicit/auto model selection."""
+        if not task_key or not user_id:
+            return {}
+        assignment = self._find_assignment(task_key, user_id, database_id)
+        if assignment is None and task_key == "agent.mongodb_readonly":
+            assignment = self._find_assignment("agent.sql_readonly", user_id, database_id)
+        if assignment is None or not assignment.enabled:
+            return {}
+        return {key: value for key, value in (
+            ("temperature", assignment.temperature), ("max_tokens", assignment.maxTokens),
+        ) if value is not None}
+
     def resolve_model_id(
         self,
         task_key: Optional[str],

@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState, useRef, lazy, Suspense, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
   Palette,
@@ -49,7 +49,10 @@ let hasSyncedWithServer = false;
 
 export function SettingsContent() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") || "general";
+  const location = useLocation();
+  const activeTab = location.pathname.startsWith("/settings/ai/knowledge")
+    ? "ai"
+    : searchParams.get("tab") || "general";
 
   const { setTheme: setNextTheme } = useTheme();
   const store = useSettingsStore();

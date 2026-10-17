@@ -5,7 +5,8 @@
 
 "use client";
 
-import { memo, useEffect, Suspense, lazy } from "react";
+import { memo, useEffect, useRef, Suspense, lazy } from "react";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { markPerformance } from "@/lib/performance/performance-marks";
 import {
@@ -59,6 +60,23 @@ export default function SQLLabPage() {
 
 function SQLLabContent() {
   const lab = useSQLLabContext();
+  const location = useLocation();
+  const handoff = location.state as {knowledgeQuestion?: string; databaseId?: string; schemaName?: string} | null;
+  const applied = useRef<string | null>(null);
+  const appliedSchema = useRef<string | null>(null);
+  useEffect(() => {
+    if (!handoff?.knowledgeQuestion || !handoff.databaseId || applied.current === location.key || !lab.dataSources?.length) return;
+    if (!lab.dataSources.some((d: {id: string}) => d.id === handoff.databaseId)) return;
+    lab.setSelectedDS(handoff.databaseId);
+    lab.setShowAISidebar(true);
+    applied.current = location.key;
+  }, [handoff, location.key, lab.dataSources, lab.setSelectedDS, lab.setShowAISidebar]);
+  useEffect(() => {
+    if (handoff?.schemaName && lab.selectedDS === handoff.databaseId && lab.schemas?.includes(handoff.schemaName) && appliedSchema.current !== location.key) {
+      lab.setSelectedSchema(handoff.schemaName);
+      appliedSchema.current = location.key;
+    }
+  }, [handoff, location.key, lab.selectedDS, lab.schemas, lab.setSelectedSchema]);
   const { syntaxErrors, revealRequest, handleErrorsChange, handleErrorClick } =
     useSyntaxDiagnostics();
 

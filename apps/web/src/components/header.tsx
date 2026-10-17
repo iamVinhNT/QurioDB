@@ -110,7 +110,7 @@ export function Header() {
         <div className="w-px h-6 bg-border mx-2" />
 
         {/* Main Navigation */}
-        <nav className="flex items-center gap-6 text-sm font-medium">
+        <nav className="flex min-w-0 items-center gap-4 overflow-x-auto whitespace-nowrap text-sm font-medium">
           {data.navMain.map((item) => (
             <Link
               key={item.url}

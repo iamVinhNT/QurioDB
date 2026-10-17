@@ -150,6 +150,39 @@ async function chooseFilter(label: string, option: string) {
 }
 
 describe("Vector Store workspace", () => {
+  it("uses the shared settings title hierarchy", async () => {
+    render(<VectorStoreMapScreen />);
+
+    const heading = await screen.findByRole("heading", {
+      name: "Vector Store",
+    });
+    expect(heading).toHaveClass("text-xl", "font-bold");
+    expect(heading.closest('[data-slot="card-header"]')).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Knowledge the AI Assistant searches to help answer your questions.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps storage details in an overlay so the status row stays stable", async () => {
+    render(<VectorStoreMapScreen />);
+
+    await screen.findByRole("button", {
+      name: "Inspect Warehouse schema (Warehouse)",
+    });
+    const details = screen.getByText("Storage details").closest("details");
+    expect(details).toHaveClass("relative", "shrink-0");
+
+    fireEvent.click(screen.getByText("Storage details"));
+
+    expect(details?.querySelector("div")).toHaveClass(
+      "absolute",
+      "right-0",
+      "top-full",
+    );
+  });
+
   it("toggles the minimap and refreshes from the canvas controls", () => {
     const refresh = vi.fn();
     render(<VectorStoreMap sources={sources} onRefresh={refresh} />);

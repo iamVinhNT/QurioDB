@@ -15,6 +15,7 @@ from services.ai.retrieval.evaluation import contains_prompt_injection
 from services.ai.retrieval.index_service import rag_index_service
 from services.ai.retrieval.metadata_source import SchemaMetadataSource
 from services.ai.retrieval.retrieval_service import rag_retrieval_service
+from services.ai.retrieval.vector_store import resolve_vector_store_config
 from services.ai.retrieval.text import format_column_reference, format_table_reference
 
 SQL_RETRIEVAL_INTENTS = {"text_to_sql", "sql_explain", "sql_repair", "sql_optimize"}
@@ -39,7 +40,8 @@ class RagContextBuilder:
 
     def build(self, understanding: QueryUnderstanding, user_id: Optional[str] = None) -> RagContextPackage:
         """Retrieves chunks, applies a token budget, and formats untrusted evidence."""
-        if not understanding.needs_retrieval:
+        enabled = resolve_vector_store_config().enabled
+        if not understanding.needs_retrieval or not enabled:
             argument = rag_argument_builder.build(
                 understanding,
                 [],
@@ -51,7 +53,8 @@ class RagContextBuilder:
                 citations=[],
                 retrieval_trace={
                     "intent": understanding.intent,
-                    "retrievalMode": "none",
+                    "retrievalMode": "none" if enabled else "disabled",
+                    "fallbackReason": "" if enabled else "rag_disabled",
                     "selectedCount": 0,
                     "argument": argument.to_dict(),
                 },
@@ -59,7 +62,16 @@ class RagContextBuilder:
             )
 
         retrieval = self._retrieve_with_schema_bootstrap(understanding, user_id)
-        items = self._budget_items(retrieval.get("items") or [], understanding)
+        from services.ai.retrieval.graph_retrieval import graph_retrieval_service
+        expanded, graph_trace = retrieval.get("items") or [], {"enabled": False, "gaps": []}
+        if "database_schema" in understanding.source_types:
+            expanded, graph_trace = graph_retrieval_service.expand(
+                understanding.retrieval_query, expanded,
+                understanding.database_id, understanding.schema, user_id,
+            )
+        items = self._budget_items(expanded, understanding)
+        if graph_trace.get("enabled") and len(items) < len(expanded):
+            graph_trace["gaps"].append("graph_context_budget_exceeded")
         citations = self._dedupe_citations(item.get("citation") for item in items if item.get("citation"))
         trace = dict(retrieval.get("retrievalTrace") or {})
         trace["intent"] = understanding.intent
@@ -72,6 +84,10 @@ class RagContextBuilder:
         trace["contextTokenBudget"] = self._max_context_tokens(understanding)
         trace["selectedCount"] = len(items)
         trace["evidenceSufficiency"] = self._evaluate_evidence_sufficiency(understanding, items)
+        trace["graph"] = graph_trace
+        if graph_trace.get("gaps"):
+            trace["evidenceSufficiency"]["isSufficient"] = False
+            trace["evidenceSufficiency"]["reasons"].extend(graph_trace["gaps"])
         warnings = self._warnings_for_trace(trace, items)
         argument = rag_argument_builder.build(understanding, items, trace["evidenceSufficiency"], warnings)
         trace["argument"] = argument.to_dict()
@@ -85,15 +101,19 @@ class RagContextBuilder:
         )
 
     def _retrieve_with_schema_bootstrap(self, understanding: QueryUnderstanding, user_id: Optional[str]) -> Dict[str, Any]:
-        retrieval = rag_retrieval_service.retrieve(
+        retriever = rag_retrieval_service
+        retrieval = retriever.retrieve(
             understanding.retrieval_query,
             database_id=understanding.database_id,
             user_id=user_id,
             source_types=understanding.source_types,
             top_k=self._top_k(understanding),
             candidate_limit=self._candidate_limit(understanding),
+            schema_name=understanding.schema,
         )
-        if retrieval.get("items") or "database_schema" not in understanding.source_types or not understanding.database_id:
+        has_schema = any(item.get("sourceType") == "database_schema" and self._schema_table_name(item)
+                         for item in retrieval.get("items", []))
+        if has_schema or "database_schema" not in understanding.source_types or not understanding.database_id:
             return retrieval
 
         try:
@@ -108,14 +128,17 @@ class RagContextBuilder:
             retrieval["retrievalTrace"] = trace
             return retrieval
 
-        return rag_retrieval_service.retrieve(
+        schema_result = retriever.retrieve(
             understanding.retrieval_query,
             database_id=understanding.database_id,
             user_id=user_id,
-            source_types=understanding.source_types,
+            source_types=["database_schema"],
             top_k=self._top_k(understanding),
             candidate_limit=self._candidate_limit(understanding),
+            schema_name=understanding.schema,
         )
+        schema_result["items"] = [*schema_result.get("items", []), *retrieval.get("items", [])]
+        return schema_result
 
     def _format_context(
         self,
@@ -169,8 +192,8 @@ class RagContextBuilder:
         schema: str,
         items: List[Dict[str, Any]],
     ) -> List[str]:
-        allowed_table_names = self._allowed_table_names(database_id, schema)
-        allowed_columns_by_table = self._allowed_columns_by_table(database_id, schema)
+        columns_by_schema = {schema: self._allowed_columns_by_table(database_id, schema)}
+        allowed_table_names = list(columns_by_schema[schema])
         table_refs = []
         column_refs = []
         seen = set()
@@ -178,17 +201,22 @@ class RagContextBuilder:
             if item.get("sourceType") != "database_schema":
                 continue
             table_name = self._schema_table_name(item)
-            if not table_name or table_name in seen:
+            item_schema = item.get("schemaName") or schema
+            identity = (item_schema, table_name)
+            if not table_name or identity in seen:
                 continue
-            seen.add(table_name)
-            table_ref = format_table_reference(table_name, schema, db_type)
+            seen.add(identity)
+            table_ref = format_table_reference(table_name, item_schema, db_type)
+            if item_schema not in columns_by_schema:
+                columns_by_schema[item_schema] = self._allowed_columns_by_table(database_id, item_schema)
+                allowed_table_names.extend(f"{item_schema}.{name}" for name in columns_by_schema[item_schema])
             table_refs.append(f"- {table_name} -> {table_ref}")
             column_refs.extend(self._format_column_contract_lines(
                 table_name,
                 table_ref,
-                allowed_columns_by_table.get(table_name, []),
+                columns_by_schema[item_schema].get(table_name, []),
                 db_type,
-                schema,
+                item_schema,
             ))
 
         if not table_refs:
@@ -213,14 +241,6 @@ class RagContextBuilder:
             *column_refs,
         ]
         return lines
-
-    def _allowed_table_names(self, database_id: Optional[str], schema: str) -> List[str]:
-        if not database_id:
-            return []
-        try:
-            return list(self.metadata.get_all_columns(database_id, schema).keys())
-        except Exception:
-            return []
 
     def _allowed_columns_by_table(self, database_id: Optional[str], schema: str) -> Dict[str, List[str]]:
         if not database_id:
@@ -262,7 +282,7 @@ class RagContextBuilder:
         ]
 
     def _schema_table_name(self, item: Dict[str, Any]) -> Optional[str]:
-        if item.get("chunkType") == "schema_graph":
+        if item.get("chunkType") in {"schema_graph", "join_path"}:
             return None
         if item.get("objectName"):
             return str(item["objectName"])
@@ -305,7 +325,7 @@ class RagContextBuilder:
                 continue
             content = str(item.get("content") or "")
             token_count = max(1, len(content.split()))
-            if used + token_count > budget and selected:
+            if used + token_count > budget:
                 break
             selected.append(item)
             seen.add(key)

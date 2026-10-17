@@ -9,4 +9,13 @@ describe("App routing", () => {
     expect(source).not.toContain("./app/ai/page");
     expect(source).not.toContain('path="/ai"');
   });
+
+  it("hosts Knowledge Base inside AI Assistant and keeps legacy links redirectable", () => {
+    const source = readFileSync(resolve(__dirname, "../src/App.tsx"), "utf8");
+
+    expect(source).toContain('path="/settings/ai/knowledge"');
+    expect(source).toContain('path="/knowledge" element={<LegacyKnowledgeRedirect />}');
+    expect(source).toContain("location.search");
+    expect(source).toContain("location.hash");
+  });
 });

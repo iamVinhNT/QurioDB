@@ -74,10 +74,10 @@ global.IntersectionObserver = class IntersectionObserver {
   takeRecords = vi.fn();
 };
 
-// SVG and Animation mocks for Base UI / JSDOM
-if (
-  typeof global.Element !== "undefined" &&
-  !global.Element.prototype.getAnimations
-) {
+// SVG and Animation mocks for Base UI / JSDOM. jsdom may expose getAnimations
+// without returning an array, while Base UI expects the browser contract.
+if (typeof global.Element !== "undefined") {
   global.Element.prototype.getAnimations = vi.fn().mockReturnValue([]);
 }
+// Base UI can skip animation-frame probing entirely in jsdom.
+(globalThis as typeof globalThis & { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;

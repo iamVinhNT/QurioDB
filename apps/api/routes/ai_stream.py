@@ -5,6 +5,7 @@ Streaming chat route for the AI Assistant.
 """
 
 import datetime
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -85,37 +86,8 @@ def _stream_action(data, current_user: dict, action: str):
 
 
 def _stream_action_response(data, user_id: str, prompt: str, conversation_id: str, history: list, action: str):
-    response_parts = new_response_parts()
-    assistant_message_id = None
     task_key = "sql.explain" if action == "Explain" else "sql.optimize"
-    try:
-        for event, chunk in ai_service.stream_generate_response(
-            prompt,
-            db_id=data.databaseId,
-            schema=data.schema_name,
-            model_id=data.modelId,
-            task_key=task_key,
-            user_id=user_id,
-            history=history,
-            conv_id=conversation_id,
-        ):
-            append_stream_part(response_parts, event, chunk)
-            assistant_message_id = _persist_stream_snapshot(
-                response_parts,
-                assistant_message_id,
-                user_id,
-                data.databaseId,
-                conversation_id,
-            )
-            yield encode_sse_event(event, chunk)
-    except Exception as exc:
-        error_message = f"Error: {exc}"
-        if assistant_message_id:
-            append_stream_part(response_parts, "message", f"\n\n{error_message}")
-            _persist_stream_snapshot(response_parts, assistant_message_id, user_id, data.databaseId, conversation_id)
-        else:
-            ai_service._save_chat("assistant", error_message, user_id, data.databaseId, conv_id=conversation_id)
-        yield encode_sse_event("error", error_message)
+    yield from _stream_response(data, user_id, prompt, conversation_id, history, task_key)
 
 
 def _resolve_stream_messages(data: StreamChatRequest):
@@ -127,38 +99,47 @@ def _resolve_stream_messages(data: StreamChatRequest):
     return messages
 
 
-def _stream_response(data: StreamChatRequest, user_id: str, last_message: str, conversation_id: str, history: list):
+def _stream_response(data: StreamChatRequest, user_id: str, last_message: str, conversation_id: str, history: list, task_key=None):
     response_parts = new_response_parts()
     assistant_message_id = None
+    pending_size = 0
+    dirty = False
+    last_saved = time.monotonic()
     try:
         for event, chunk in ai_service.stream_generate_response(
             last_message,
             db_id=data.databaseId,
             schema=data.schema_name,
             model_id=data.modelId,
-            task_key=data.taskKey,
+            task_key=task_key or getattr(data, "taskKey", None),
             user_id=user_id,
             history=history,
             conv_id=conversation_id,
         ):
             append_stream_part(response_parts, event, chunk)
-            assistant_message_id = _persist_stream_snapshot(
-                response_parts,
-                assistant_message_id,
-                user_id,
-                data.databaseId,
-                conversation_id,
-            )
+            dirty = True
+            pending_size += len(str(chunk))
+            now = time.monotonic()
+            if assistant_message_id is None or pending_size >= 4096 or now - last_saved >= 1.0:
+                assistant_message_id = _persist_stream_snapshot(
+                    response_parts, assistant_message_id, user_id, data.databaseId, conversation_id,
+                )
+                pending_size, last_saved = 0, now
+                dirty = False
             yield encode_sse_event(event, chunk)
 
     except Exception as exc:
         error_message = f"Error: {exc}"
         if assistant_message_id:
             append_stream_part(response_parts, "message", f"\n\n{error_message}")
-            _persist_stream_snapshot(response_parts, assistant_message_id, user_id, data.databaseId, conversation_id)
+            dirty = True
         else:
             ai_service._save_chat("assistant", error_message, user_id, data.databaseId, conv_id=conversation_id)
         yield encode_sse_event("error", error_message)
+    finally:
+        # GeneratorExit on disconnect must persist the last partial response too.
+        if dirty:
+            _persist_stream_snapshot(response_parts, assistant_message_id, user_id, data.databaseId, conversation_id)
 
 
 def _stream_headers(conversation_id: str):
@@ -179,7 +160,7 @@ def _persist_stream_snapshot(parts: dict, message_id: str | None, user_id: str, 
     session = SessionLocal()
     try:
         if message_id:
-            message = session.query(AIChatMessage).get(message_id)
+            message = session.get(AIChatMessage, message_id)
             if message:
                 message.content = content
         else:
@@ -192,7 +173,7 @@ def _persist_stream_snapshot(parts: dict, message_id: str | None, user_id: str, 
                 databaseId=database_id,
                 conversationId=conversation_id,
             ))
-        conversation = session.query(AIConversation).get(conversation_id)
+        conversation = session.get(AIConversation, conversation_id) if conversation_id else None
         if conversation:
             conversation.changed_on = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         session.commit()

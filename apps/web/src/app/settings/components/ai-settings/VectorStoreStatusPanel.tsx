@@ -3,16 +3,12 @@
  * @description Compact retrieval summary and expandable database sync controls for AI settings.
  */
 
-import type { RefObject } from "react";
 import { formatDistanceToNow } from "date-fns";
 import {
   AlertTriangle,
   ChevronDown,
   Database,
-  FilePlus2,
-  HardDrive,
   Loader2,
-  Network,
   RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -35,30 +31,20 @@ interface VectorStoreStatusPanelProps {
   vectorStatus?: RagVectorStatus;
   overview: VectorStoreOverview;
   isLoading?: boolean;
-  isRefreshing?: boolean;
   hasError?: boolean;
   syncingDatabaseId?: string | null;
   syncResults: Record<string, VectorStoreSyncSummary>;
-  onRefresh: () => void;
   onSyncDatabase: (coverage: VectorStoreDatabaseCoverage) => void;
-  onAddSources?: () => void;
-  onOpenMap: () => void;
-  mapTriggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function VectorStoreStatusPanel({
   vectorStatus,
   overview,
   isLoading,
-  isRefreshing,
   hasError,
   syncingDatabaseId,
   syncResults,
-  onRefresh,
   onSyncDatabase,
-  onAddSources,
-  onOpenMap,
-  mapTriggerRef,
 }: VectorStoreStatusPanelProps) {
   const isEnabled = vectorStatus?.enabled === true;
   const connected = overview.databases.filter((entry) => entry.isConnected);
@@ -75,74 +61,8 @@ export function VectorStoreStatusPanel({
       className="rounded-xl border border-border/60 bg-background/60"
       aria-label="Vector store overview"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3 p-4">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <div className="rounded-lg bg-amber-500/10 p-2.5 text-amber-600 dark:text-amber-400">
-            <HardDrive className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold">Vector Store</h3>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "rounded-md text-[11px]",
-                  isEnabled &&
-                    "border-emerald-500/30 text-emerald-700 dark:text-emerald-400",
-                )}
-              >
-                {isLoading
-                  ? "Loading…"
-                  : !vectorStatus
-                    ? "Status unavailable"
-                    : isEnabled
-                      ? "Retrieval enabled"
-                      : "Retrieval disabled"}
-              </Badge>
-            </div>
-            <p className="mt-1 max-w-lg text-xs text-muted-foreground">
-              Knowledge the AI Assistant searches to help answer your questions.
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {onAddSources ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={onAddSources}
-            >
-              <FilePlus2 className="h-4 w-4" />
-              Add source
-            </Button>
-          ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2"
-            ref={mapTriggerRef}
-            onClick={onOpenMap}
-          >
-            <Network className="h-4 w-4" />
-            Open map
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={onRefresh}
-            disabled={isRefreshing || isLoading}
-            aria-label="Refresh vector store status"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", isRefreshing && "animate-spin")}
-            />
-          </Button>
-        </div>
-      </div>
       <div
-        className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border/40 px-4 py-3 text-xs text-muted-foreground"
+        className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 text-xs text-muted-foreground"
         aria-live="polite"
       >
         <span>
@@ -166,11 +86,11 @@ export function VectorStoreStatusPanel({
         <span title={absoluteTime(overview.lastIndexedOn)}>
           Last indexed: {isLoading ? "…" : relativeTime(overview.lastIndexedOn)}
         </span>
-        <details className="ml-auto">
-          <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+        <details className="relative ml-auto shrink-0">
+          <summary className="cursor-pointer rounded-sm text-xs focus-visible:outline-2 focus-visible:outline-ring">
             Storage details
           </summary>
-          <div className="mt-2 space-y-1">
+          <div className="absolute right-0 top-full z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] space-y-1 rounded-lg border border-border/60 bg-popover p-3 text-xs text-popover-foreground shadow-lg">
             <p>
               Backend: {vectorStatus?.backend || "Unavailable"} ·{" "}
               {vectorStatus?.requiresExternalService

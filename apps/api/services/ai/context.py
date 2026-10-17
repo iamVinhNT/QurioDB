@@ -261,15 +261,6 @@ class SchemaContextService:
             accessible_databases=accessible_databases,
         )
 
-    def _get_mongodb_database(self, db_id: str, schema: str) -> Optional[str]:
-        """Resolve the trusted Mongo database without issuing schema SQL."""
-        try:
-            database, _ = self._resolve_mongodb_database(db_id, schema)
-            return database
-        except Exception as exc:
-            logger.warning("MongoDB database metadata unavailable for %s: %s", db_id, exc)
-            return None
-
     def _resolve_mongodb_database(self, db_id: str, schema: str) -> tuple[str, tuple[str, ...]]:
         """Select one configured or requested database from server-reported names."""
         accessible_databases = tuple(

@@ -21,6 +21,8 @@ from .rag_chunk import RagChunk
 from .rag_embedding import RagEmbedding
 from .rag_retrieval_event import RagRetrievalEvent
 from .rag_source import RagSource
+from .knowledge import KnowledgeBase, KnowledgeDocument, KnowledgeRevision, KnowledgeIndexJob
+from .rag_graph import GraphNode, GraphEdge, GraphEvidence
 from .role import Role
 from .saved_query import SavedQuery
 from .schema_embedding import SchemaEmbedding
@@ -46,6 +48,13 @@ __all__ = [
     "RagEmbedding",
     "RagRetrievalEvent",
     "RagSource",
+    "KnowledgeBase",
+    "KnowledgeDocument",
+    "KnowledgeRevision",
+    "KnowledgeIndexJob",
+    "GraphNode",
+    "GraphEdge",
+    "GraphEvidence",
     "Role",
     "SSLMode",
     "SavedQuery",

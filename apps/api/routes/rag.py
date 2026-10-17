@@ -88,12 +88,13 @@ def index_saved_queries(data: RagIndexSavedQueriesRequest, current_user: dict = 
 
 
 @router.post("/index/query-history")
-def index_query_history(data: RagIndexQueryHistoryRequest):
+def index_query_history(data: RagIndexQueryHistoryRequest, current_user: dict = Depends(get_current_user)):
     """Indexes masked query history after explicit user/admin action."""
     return rag_index_service.index_query_history(
         data.databaseId,
         include_failed=data.includeFailed,
         limit=data.limit,
+        user_id=current_user.get("userId"),
     )
 
 

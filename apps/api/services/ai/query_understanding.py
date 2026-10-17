@@ -146,9 +146,9 @@ class QueryUnderstandingService:
 
     def _source_types_for_intent(self, intent: str) -> List[str]:
         if intent == "document_question":
-            return ["document", "web_page"]
+            return ["document", "web_page", "knowledge_document"]
         if intent in {"text_to_sql", "sql_explain", "sql_repair", "sql_optimize"}:
-            return ["database_schema", "saved_query", "query_history"]
+            return ["database_schema", "saved_query", "query_history", "knowledge_document"]
         if intent == "schema_question":
             return ["database_schema"]
         return []
@@ -173,9 +173,6 @@ class QueryUnderstandingService:
         if not prompt:
             return False
         return len(str(prompt).split()) <= 24
-
-    def _has_explicit_database_syntax(self, normalized: str) -> bool:
-        return bool(EXPLICIT_DATABASE_SYNTAX_PATTERN.search(normalized))
 
     def _intent_router_prompt(self) -> str:
         return """You classify QurioDB user behavior for routing only.

@@ -18,6 +18,10 @@ export interface AICitation {
   objectName?: string;
   schemaName?: string;
   score?: number;
+  documentId?: string;
+  revisionId?: string;
+  knowledgeBaseId?: string;
+  section?: string;
   matchedTerms?: string[];
   reasons?: string[];
 }

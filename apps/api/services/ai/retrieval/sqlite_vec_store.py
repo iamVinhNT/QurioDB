@@ -5,6 +5,7 @@ Optional sqlite-vec accelerator for local desktop RAG semantic retrieval.
 """
 
 import logging
+import json
 from typing import Dict, Iterable, List, Optional
 
 from .vector_store import resolve_vector_store_config
@@ -36,7 +37,7 @@ class SqliteVecStore:
             return True
         except Exception as exc:
             self._available_cache = False
-            logger.warning("sqlite-vec backend unavailable, falling back to JSON vectors: %s", exc)
+            logger.warning("sqlite-vec backend unavailable, using lexical retrieval: %s", exc)
             return False
 
     def upsert_embedding(self, session, chunk, source, vector: List[float]) -> bool:
@@ -107,6 +108,17 @@ class SqliteVecStore:
         ).fetchall()
         self._delete_rows(connection, rows)
 
+    def delete_chunks(self, session, chunk_ids):
+        if not chunk_ids or not self.is_available(session):
+            return
+        connection = self._dbapi_connection(session)
+        self._ensure_map_table(connection)
+        rows = connection.execute(
+            f"SELECT rowid, dimensions FROM {self._map_table} WHERE chunk_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(chunk_ids),),
+        ).fetchall()
+        self._delete_rows(connection, rows)
+
     def semantic_scores(
         self,
         session,
@@ -115,6 +127,7 @@ class SqliteVecStore:
         user_id: Optional[str] = None,
         source_types: Optional[List[str]] = None,
         k: int = 32,
+        candidate_chunk_ids: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """Returns chunk cosine similarity scores from sqlite-vec KNN queries."""
         if not query_vector or not self.is_available(session):
@@ -124,6 +137,17 @@ class SqliteVecStore:
         connection = self._dbapi_connection(session)
         self._ensure_schema(connection, dimensions)
         table_name = self._table_name(dimensions)
+        if candidate_chunk_ids is not None:
+            # A rowid IN constraint is applied by vec0 before KNN top-k. JSON keeps
+            # the parameter count bounded even for large authorized candidate sets.
+            rows = connection.execute(f"""
+                SELECT chunk_id, distance FROM {table_name}
+                WHERE embedding MATCH ? AND k = ? AND rowid IN (
+                    SELECT rowid FROM {self._map_table}
+                    WHERE chunk_id IN (SELECT value FROM json_each(?)) AND dimensions = ?
+                )
+            """, (self._serialize(query_vector), max(1, int(k)), json.dumps(candidate_chunk_ids), dimensions)).fetchall()
+            return {chunk_id: max(0.0, 1.0 - float(distance)) for chunk_id, distance in rows}
         scores: Dict[str, float] = {}
         for query, params in self._search_queries(table_name, database_id, user_id, source_types, k):
             rows = connection.execute(query, [self._serialize(query_vector), *params]).fetchall()

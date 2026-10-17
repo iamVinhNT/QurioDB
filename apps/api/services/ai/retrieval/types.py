@@ -90,6 +90,7 @@ class RagRetrievalResult:
         """Builds a compact citation for assistant answers."""
         citation_id = self.metadata.get("citation") or f"rag:{self.source_id}/chunk:{self.chunk_id}"
         return {
+            **{key: self.metadata[key] for key in ("documentId", "revisionId", "knowledgeBaseId", "section") if key in self.metadata},
             "id": citation_id,
             "sourceType": self.source_type,
             "title": self.title,

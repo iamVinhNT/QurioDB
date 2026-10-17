@@ -5,6 +5,7 @@ Text normalization, schema index document construction, and retrieval reason hel
 """
 
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Optional
 
 SQL_QUERY_SYNONYMS = {
@@ -191,7 +192,9 @@ def tokenize(text: str) -> List[str]:
 def normalize_text(text: str) -> str:
     """Normalizes text into searchable lower-case tokens."""
     split = " ".join(split_identifier(str(text)))
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", split.lower())).strip()
+    folded = "".join(c for c in unicodedata.normalize("NFKD", split.lower().replace("đ", "d"))
+                     if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", re.sub(r"[^\w]+", " ", folded, flags=re.UNICODE)).strip()
 
 
 def split_identifier(value: str) -> List[str]:

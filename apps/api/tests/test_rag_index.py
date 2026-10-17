@@ -45,6 +45,14 @@ def rag_session_factory(monkeypatch):
 
     monkeypatch.setattr(index_module, "SessionLocal", factory)
     monkeypatch.setattr(retrieval_module, "SessionLocal", factory)
+    # These tests control metadata methods individually; production snapshot reads
+    # use strict inspector reflection instead of tolerant UI metadata helpers.
+    from services.ai.retrieval.metadata_source import SchemaMetadataSource
+    monkeypatch.setattr(SchemaMetadataSource, "get_schema_snapshot", lambda self, db, schema: (
+        self.get_all_columns(db, schema), self.get_all_foreign_keys(db, schema),
+        self.get_db_type(db), self.get_indexes_for_tables(db, schema, [])))
+    from services.ai.retrieval.embedding_gateway import GeminiEmbeddingGateway
+    monkeypatch.setattr(GeminiEmbeddingGateway, "for_user", lambda self, user: self)
     return factory
 
 
@@ -656,7 +664,7 @@ def test_rag_pipeline_plan_returns_understanding_and_context(monkeypatch):
         },
     )
     monkeypatch.setattr("services.ai.rag_context.rag_index_service.index_database_schema", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("services.ai.rag_context.RagContextBuilder._allowed_table_names", lambda *_args, **_kwargs: ["orders"])
+    monkeypatch.setattr("services.ai.rag_context.RagContextBuilder._allowed_columns_by_table", lambda *_args, **_kwargs: {"orders": ["total"]})
     monkeypatch.setattr("services.ai.rag_context.RagContextBuilder._schema_table_name", lambda _self, item: item.get("objectName"))
     monkeypatch.setattr("services.ai.retrieval.pipeline.rag_context_builder.metadata.get_db_type", lambda *_: "postgresql")
 

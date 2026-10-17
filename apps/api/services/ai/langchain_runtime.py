@@ -183,11 +183,6 @@ def normalize_provider(provider: Optional[str]) -> str:
     return aliases.get(value, value)
 
 
-def is_google_provider(provider: Optional[str]) -> bool:
-    """Returns true when a provider should use Google's native Gemini fallback."""
-    return normalize_provider(provider) == "google"
-
-
 def infer_provider_from_model_id(model_id: Optional[str]) -> str:
     """Best-effort provider inference for OpenAI-compatible model IDs."""
     value = (model_id or "").lower()
@@ -244,10 +239,6 @@ class LangChainRuntime:
     @property
     def is_graph_available(self) -> bool:
         return HAS_LANGGRAPH
-
-    @property
-    def is_langsmith_available(self) -> bool:
-        return HAS_LANGSMITH
 
     def resolve_provider(self, model_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         """Resolves provider from model registry, user settings, then model-id heuristics."""
@@ -600,9 +591,11 @@ class LangChainRuntime:
         provider: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
         db_id: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
     ) -> Iterable[str]:
         """Streams normalized text chunks from a LangChain chat model."""
-        model = self.build_model(model_id, user_id=user_id, provider=provider, temperature=0.2)
+        model = self.build_model(model_id, user_id=user_id, provider=provider, temperature=temperature, max_tokens=max_tokens)
         messages = self.make_messages(system_prompt, prompt, history=history)
         config = {"metadata": langsmith_metadata(user_id=user_id, db_id=db_id)}
         for chunk in model.stream(messages, config=config):

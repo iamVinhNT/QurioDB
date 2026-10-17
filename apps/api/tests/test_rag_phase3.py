@@ -42,7 +42,7 @@ def test_query_understanding_classifies_and_rewrites_followup_sql(ai_intent_rout
 
     assert understanding.intent == "text_to_sql"
     assert understanding.needs_retrieval is True
-    assert understanding.source_types == ["database_schema", "saved_query", "query_history"]
+    assert understanding.source_types == ["database_schema", "saved_query", "query_history", "knowledge_document"]
     assert "Previous SQL context" in understanding.retrieval_query
 
 

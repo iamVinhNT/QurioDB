@@ -9,6 +9,7 @@ import { Database, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { AICitation } from "./types";
+import { knowledgeDocumentPath } from "@/app/knowledge/routes";
 
 interface ContextSourcesProps {
   citations?: AICitation[];
@@ -16,6 +17,7 @@ interface ContextSourcesProps {
 }
 
 interface DisplaySource {
+  href?: string;
   key: string;
   label: string;
   typeLabel: string;
@@ -58,7 +60,7 @@ export function ContextSources({ citations = [], isDark }: ContextSourcesProps) 
               title={buildSourceTitle(source)}
             >
               <Icon className="h-3 w-3 shrink-0" />
-              <span className="truncate">{source.label}</span>
+              <span className="truncate">{source.href ? <a className="underline" href={source.href}>{source.label}</a> : source.label}</span>
               <span className="rounded border border-border/60 px-1 text-[9px] uppercase tracking-widest text-muted-foreground/70">
                 {source.typeLabel}
               </span>
@@ -77,10 +79,13 @@ function buildDisplaySources(citations: AICitation[]): DisplaySource[] {
     const label = sourceLabel(citation);
     if (!label) continue;
 
-    const key = `${citation.sourceType}:${label}`;
+    const key = citation.revisionId ? `${citation.revisionId}:${citation.section}` : `${citation.sourceType}:${label}`;
     const current = grouped.get(key);
     const next: DisplaySource = {
       key,
+      href: citation.documentId && citation.revisionId && citation.knowledgeBaseId
+        ? knowledgeDocumentPath(citation.knowledgeBaseId, citation.documentId, citation)
+        : undefined,
       label,
       typeLabel: sourceTypeLabel(citation.sourceType),
       title: citation.title,
@@ -126,6 +131,8 @@ function sourceTypeLabel(sourceType: string) {
       return "query";
     case "query_history":
       return "history";
+    case "knowledge_document":
+      return "knowledge";
     case "document":
       return "doc";
     case "web_page":

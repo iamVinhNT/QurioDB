@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { Activity } from "lucide-react";
 import { toast } from "sonner";
 
@@ -64,7 +65,8 @@ function AIAssistantContent({
   const selectedDatabaseType = lab.selectedDSType;
   const editorSql = lab.sql || "";
   const lastError = lab.error || undefined;
-  const [input, setInput] = useState("");
+  const location = useLocation();
+  const [input, setInput] = useState(() => String(location.state?.knowledgeQuestion || ""));
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(AUTO_MODEL_VALUE);
   const [runtimeStatus, setRuntimeStatus] = useState<AIRuntimeStatus | null>(null);

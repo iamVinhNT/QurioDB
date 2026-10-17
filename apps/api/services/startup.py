@@ -28,6 +28,7 @@ def setup_database():
     try:
         print("Backend: Checking and initializing database schema...")
         Base.metadata.create_all(engine)
+        migrate_knowledge_schema(engine)
         migrate_user_ai_configs_for_provider_keys(engine)
         migrate_legacy_gateway_provider(engine)
         migrate_remove_workspace_git_metadata(engine)
@@ -56,6 +57,16 @@ def seed_roles(session, role_model):
 
         role_id = "default" if role_data["name"] == "Default" else str(uuid.uuid4())
         session.add(role_model(id=role_id, **role_data))
+
+
+def migrate_knowledge_schema(engine):
+    """Add isolated knowledge tables idempotently without rewriting legacy sources."""
+    from models import KnowledgeBase, KnowledgeDocument, KnowledgeRevision, KnowledgeIndexJob
+    from models import GraphNode, GraphEdge, GraphEvidence
+
+    for model in (KnowledgeBase, KnowledgeDocument, KnowledgeRevision, KnowledgeIndexJob,
+                  GraphNode, GraphEdge, GraphEvidence):
+        model.__table__.create(engine, checkfirst=True)
 
 
 def seed_default_admin(session, role_model, user_model):

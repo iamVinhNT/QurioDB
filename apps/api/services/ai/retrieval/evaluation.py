@@ -84,3 +84,19 @@ def contains_prompt_injection(text: str) -> bool:
     """Flags suspicious retrieved text that attempts to override instructions."""
     normalized = " ".join(str(text or "").lower().split())
     return any(marker in normalized for marker in PROMPT_INJECTION_MARKERS)
+
+
+def graph_evidence_coverage(items, required_tables, required_column_pairs):
+    """Measure full required-set coverage, independently from first-hit recall."""
+    tables = {f"{item.get('schemaName')}.{item.get('objectName')}" for item in items
+              if item.get("chunkType") == "table"}
+    import re
+    content = "\n".join(item.get("content", "") for item in items if item.get("sourceType") == "database_schema")
+    covered_pairs = sum(1 for left, right in required_column_pairs
+                        if repr((left, right)) in content or repr([left, right]) in content
+                        or re.search(r"\." + re.escape(left) + r"\s*->\s*[^\s]+\." + re.escape(right) + r"\b", content))
+    required = set(required_tables)
+    return {"requiredTableCoverage": len(tables & required) / len(required) if required else 1.0,
+            "joinPairCoverage": covered_pairs / len(required_column_pairs) if required_column_pairs else 1.0,
+            "allRequiredTables": required <= tables,
+            "allRequiredJoinPairs": covered_pairs == len(required_column_pairs)}

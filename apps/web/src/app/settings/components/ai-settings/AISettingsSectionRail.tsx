@@ -3,14 +3,14 @@
  * @description Navigation rail for switching between compact AI Assistant settings sections.
  */
 
-import { Activity, BrainCircuit, Database, Globe, Network, Route, SearchCode } from "lucide-react";
+import { Activity, BookOpen, BrainCircuit, Database, Globe, Network, Route, SearchCode } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export type AISettingsSectionKey = "gateway" | "models" | "routing" | "terms" | "rag" | "vector-store";
+export type AISettingsSectionKey = "gateway" | "models" | "routing" | "terms" | "rag" | "vector-store" | "knowledge-base";
 
 export interface AISettingsSection {
   key: AISettingsSectionKey;
@@ -62,6 +62,13 @@ export const AI_SETTINGS_SECTIONS: AISettingsSection[] = [
     description: "Index status and sources",
     icon: Network,
     accentClass: "text-amber-500 bg-amber-500/10 border-amber-500/20",
+  },
+  {
+    key: "knowledge-base",
+    label: "Knowledge Base",
+    description: "Documents and context",
+    icon: BookOpen,
+    accentClass: "text-fuchsia-500 bg-fuchsia-500/10 border-fuchsia-500/20",
   },
 ];
 

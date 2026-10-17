@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 def register_handlers(app: FastAPI) -> None:
     """Register lightweight middleware, health endpoints, and error handlers."""
+    from services.knowledge_access import KnowledgeError
+
+    @app.exception_handler(KnowledgeError)
+    async def knowledge_error(request: Request, exc: KnowledgeError):
+        return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
 
     @app.middleware("http")
     async def log_request_info(request: Request, call_next):

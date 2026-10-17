@@ -1,70 +1,49 @@
-"""
-embedding_gateway.py
-
-LangChain Google embedding adapter for schema retrieval with graceful offline fallback.
-"""
+"""embedding_gateway.py — Owner-scoped Google embeddings with bounded HTTP attempts."""
 
 import logging
-from typing import List, Optional
-
-from ..base import _get_system_api_key
-
-try:
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-    HAS_GOOGLE_EMBEDDINGS = True
-except ImportError:
-    GoogleGenerativeAIEmbeddings = None
-    HAS_GOOGLE_EMBEDDINGS = False
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiEmbeddingGateway:
-    """Wraps Gemini embedding calls behind a small, mockable interface."""
+    """Resolve current credentials for each operation, with lexical fallback offline."""
 
-    def __init__(self, model: str = "models/gemini-embedding-2-preview"):
+    def __init__(self, model: str = "models/gemini-embedding-2-preview", user_id: Optional[str] = None):
         self.model = model
-        self._api_key: Optional[str] = None
+        self.user_id = user_id
 
-    def is_available(self) -> bool:
-        """Returns whether embeddings can be used for this process."""
-        return bool(HAS_GOOGLE_EMBEDDINGS and GoogleGenerativeAIEmbeddings and self._get_api_key())
+    def for_user(self, user_id):
+        return self if self.user_id == user_id else GeminiEmbeddingGateway(self.model, user_id)
 
-    def embed_document(self, content: str) -> List[float]:
-        """Embeds schema index text for retrieval."""
-        return self._embed(content, task_type="RETRIEVAL_DOCUMENT")
-
-    def embed_query(self, content: str) -> List[float]:
-        """Embeds user intent text for retrieval."""
-        return self._embed(content, task_type="RETRIEVAL_QUERY")
-
-    def _get_api_key(self) -> Optional[str]:
-        if not self._api_key:
-            self._api_key = _get_system_api_key()
-        return self._api_key
-
-    def _build_embeddings(self, task_type: str):
-        api_key = self._get_api_key()
-        if not api_key or not HAS_GOOGLE_EMBEDDINGS or not GoogleGenerativeAIEmbeddings:
+    def _get_api_key(self):
+        if not self.user_id:
             return None
+        from services.ai.langchain_runtime import get_ai_api_key
+        return get_ai_api_key(user_id=self.user_id, provider="google")
 
-        return GoogleGenerativeAIEmbeddings(
-            model=self.model,
-            api_key=api_key,
-            task_type=task_type,
-        )
+    def is_available(self):
+        return bool(self._get_api_key())
 
-    def _embed(self, content: str, task_type: str) -> List[float]:
-        embeddings = self._build_embeddings(task_type)
-        if not embeddings:
+    def embed_document(self, content):
+        return self._embed(content, "RETRIEVAL_DOCUMENT")
+
+    def embed_query(self, content):
+        return self._embed(content, "RETRIEVAL_QUERY")
+
+    def _embed(self, content, task_type):
+        key = self._get_api_key()
+        if not key:
             return []
-
+        from google import genai
+        from google.genai import types
         try:
-            if task_type == "RETRIEVAL_DOCUMENT":
-                vectors = embeddings.embed_documents([content])
-                return vectors[0] if vectors else []
-            return embeddings.embed_query(content)
+            with genai.Client(api_key=key, http_options=types.HttpOptions(
+                timeout=10000, retry_options=types.HttpRetryOptions(attempts=1),
+            )) as client:
+                result = client.models.embed_content(model=self.model, contents=content,
+                    config=types.EmbedContentConfig(task_type=task_type))
+                return list(result.embeddings[0].values) if result.embeddings else []
         except Exception as exc:
-            logger.warning("Failed to embed schema content with LangChain: %s", exc)
+            logger.warning("Embedding unavailable: %s", type(exc).__name__)
             return []

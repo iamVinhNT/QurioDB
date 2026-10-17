@@ -222,10 +222,6 @@ class MongoQuerySpec:
             options=_copy_json(options),
         )
 
-    def with_options(self, options: Mapping[str, Any]) -> "MongoQuerySpec":
-        """Return a copy with policy-normalized execution options."""
-        return replace(self, options=_copy_json(dict(options)))
-
     def to_payload(self) -> dict[str, Any]:
         """Return a JSON-safe semantic payload for API responses and repair."""
         payload: dict[str, Any] = {

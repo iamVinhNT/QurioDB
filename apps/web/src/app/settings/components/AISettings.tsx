@@ -3,7 +3,8 @@
  * @description Root AI settings component that orchestrates sub-components for provider and model management.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { z } from "zod";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,8 @@ import {
   AISettingsSectionRail,
 } from "./ai-settings/AISettingsSectionRail";
 
+const KnowledgePage = lazy(() => import("@/app/knowledge/page"));
+
 const aiConfigResponseSchema = z.object({
   apiKey: z.string().nullable(),
   provider: z.string(),
@@ -38,6 +41,8 @@ const aiConfigResponseSchema = z.object({
  * Adheres to Clean Code standards by modularizing large sections into sub-components.
  */
 export function AISettings() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { registerActions } = useSettingsActions();
 
@@ -51,7 +56,8 @@ export function AISettings() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [modelToDelete, setModelToDelete] = useState<{ id: string, name: string } | null>(null);
   const [newModel, setNewModel] = useState<NewAIModel>({ name: "", modelId: "", provider: "Google", description: "" });
-  const [activeSection, setActiveSection] = useState<AISettingsSectionKey>("gateway");
+  const knowledgeRoute = location.pathname.startsWith("/settings/ai/knowledge");
+  const [activeSection, setActiveSection] = useState<AISettingsSectionKey>(knowledgeRoute ? "knowledge-base" : "gateway");
 
   // 1. Fetch AI Config
   const configQuery = useQuery({
@@ -213,6 +219,7 @@ export function AISettings() {
     terms: "db",
     rag: statusQuery.data?.rag?.enabled ? "on" : "local",
     "vector-store": Array.isArray(ragSourcesQuery.data) ? String(ragSourcesQuery.data.length) : undefined,
+    "knowledge-base": "docs",
   };
 
   const renderActiveSection = () => {
@@ -267,8 +274,23 @@ export function AISettings() {
         return <RagIndexingCard />;
       case "vector-store":
         return <VectorStoreMapScreen onAddSources={() => setActiveSection("rag")} />;
+      case "knowledge-base":
+        return (
+          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Đang tải kho tri thức…</div>}>
+            <KnowledgePage />
+          </Suspense>
+        );
       default:
         return null;
+    }
+  };
+
+  const handleSectionChange = (section: AISettingsSectionKey) => {
+    setActiveSection(section);
+    if (section === "knowledge-base") {
+      navigate("/settings/ai/knowledge");
+    } else if (knowledgeRoute) {
+      navigate("/settings?tab=ai");
     }
   };
 
@@ -279,12 +301,12 @@ export function AISettings() {
           <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
             <AISettingsSectionRail
               activeSection={activeSection}
-              onSectionChange={setActiveSection}
+              onSectionChange={handleSectionChange}
               metrics={sectionMetrics}
             />
 
             <div
-              className="min-h-0 overflow-y-auto pr-3 custom-scrollbar"
+              className="min-h-0 overflow-y-auto border-r border-border/40 pr-4 custom-scrollbar"
               role="tabpanel"
               id={`ai-settings-panel-${activeSection}`}
               aria-labelledby={`ai-settings-tab-${activeSection}`}
