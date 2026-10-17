@@ -70,6 +70,11 @@ export function AISettings() {
     queryFn: () => aiApi.getAIStatus(),
   });
 
+  const ragSourcesQuery = useQuery({
+    queryKey: ["rag-sources"],
+    queryFn: () => aiApi.getRagSources(),
+  });
+
   const taskCatalogQuery = useQuery({
     queryKey: ["ai-task-catalog"],
     queryFn: () => aiApi.getTaskCatalog(),
@@ -207,7 +212,7 @@ export function AISettings() {
     routing: String(taskCatalog.length),
     terms: "db",
     rag: statusQuery.data?.rag?.enabled ? "on" : "local",
-    "vector-store": "map",
+    "vector-store": Array.isArray(ragSourcesQuery.data) ? String(ragSourcesQuery.data.length) : undefined,
   };
 
   const renderActiveSection = () => {
@@ -261,7 +266,7 @@ export function AISettings() {
       case "rag":
         return <RagIndexingCard />;
       case "vector-store":
-        return <VectorStoreMapScreen />;
+        return <VectorStoreMapScreen onAddSources={() => setActiveSection("rag")} />;
       default:
         return null;
     }

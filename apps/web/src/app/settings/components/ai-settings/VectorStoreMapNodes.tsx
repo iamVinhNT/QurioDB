@@ -15,6 +15,7 @@ import {
   type VectorStoreGraphNode,
   type VectorStoreGraphNodeData,
 } from "./vector-store-map-graph";
+import { parseServerTimestamp } from "./vector-store-overview";
 
 export function RagVectorNode({ data, selected }: NodeProps<VectorStoreGraphNode>) {
   const Icon = nodeIcon(data.kind);
@@ -89,6 +90,7 @@ export function SourceInspector({
   const databaseLabel = source.databaseId
     ? databaseLabels[source.databaseId] || source.databaseId
     : "global";
+  const indexedOn = parseServerTimestamp(source.indexed_on);
 
   return (
     <div className="space-y-4 rounded-lg border border-border/50 bg-background/70 p-4">
@@ -102,8 +104,8 @@ export function SourceInspector({
       <dl className="grid grid-cols-1 gap-2.5 text-sm">
         <InspectorRow label="Database" value={databaseLabel} />
         <InspectorRow label="Access" value={source.accessScope || "database"} />
-        <InspectorRow label="Indexed" value={source.indexed_on ? new Date(source.indexed_on).toLocaleString() : "pending"} />
-        <InspectorRow label="Chunks" value={isLoading ? "loading" : String(detail?.chunks?.length || 0)} />
+        <InspectorRow label="Indexed" value={indexedOn ? indexedOn.toLocaleString() : "pending"} />
+        <InspectorRow label="Chunks" value={isLoading ? "loading" : String(detail?.chunkCount ?? detail?.chunks?.length ?? 0)} />
       </dl>
       {detail?.chunks?.length ? (
         <div className="space-y-1.5">

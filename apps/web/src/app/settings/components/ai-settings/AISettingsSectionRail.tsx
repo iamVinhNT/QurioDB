@@ -59,7 +59,7 @@ export const AI_SETTINGS_SECTIONS: AISettingsSection[] = [
   {
     key: "vector-store",
     label: "Vector Store",
-    description: "Source map",
+    description: "Index status and sources",
     icon: Network,
     accentClass: "text-amber-500 bg-amber-500/10 border-amber-500/20",
   },
