@@ -6,11 +6,18 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Source detail pagination now groups the chunk range/count with icon-only Previous/Next controls in its fixed bottom bar. See [change-log/2026-10-17-1110-source-detail-bottom-pagination.md](change-log/2026-10-17-1110-source-detail-bottom-pagination.md).
+- Source details prioritize chunk content with compact metadata, fixed search/pagination and header expand/restore controls. See [change-log/2026-10-17-1101-source-detail-chunk-space.md](change-log/2026-10-17-1101-source-detail-chunk-space.md).
+- Source detail pagination stays visible in a fixed footer in both the source sheet and map inspector. See [change-log/2026-10-17-1036-source-detail-fixed-pagination.md](change-log/2026-10-17-1036-source-detail-fixed-pagination.md).
+- Vector Store minimap renders source nodes with matching SVG bounds; minimap and refresh actions now share the bottom-left map controls. See [change-log/2026-10-17-1024-vector-store-minimap-controls.md](change-log/2026-10-17-1024-vector-store-minimap-controls.md).
 - AI activity progress keeps the final step's shadow visible inside the collapsible timeline. See [change-log/2026-10-17-0923-ai-progress-last-step-clipping.md](change-log/2026-10-17-0923-ai-progress-last-step-clipping.md).
 - CSV export now honors encoding bytes, adds Unicode BOMs for Excel, rejects unrepresentable text, and protects formula cells while preserving valid numbers. See [change-log/2026-10-13-2359-csv-export-encoding-safety.md](change-log/2026-10-13-2359-csv-export-encoding-safety.md).
 
 ### Removed
 
+- Remove the Vector Store Map search/count toolbar so the graph fills the content area. See [change-log/2026-10-17-1120-remove-map-search.md](change-log/2026-10-17-1120-remove-map-search.md).
+- Remove the Sources / How retrieval works switcher and guide from the Vector Store map; it opens directly on Sources. See [change-log/2026-10-17-1119-remove-map-view-switcher.md](change-log/2026-10-17-1119-remove-map-view-switcher.md).
+- Source details no longer offer expand/restore controls in the source sheet or Map inspector. See [change-log/2026-10-17-1117-remove-source-detail-expansion.md](change-log/2026-10-17-1117-remove-source-detail-expansion.md).
 - Undo the review-added 9router endpoint fallback; Custom Provider continues to require an explicitly configured base URL. See [change-log/2026-10-12-2327-remove-legacy-gateway-fallback.md](change-log/2026-10-12-2327-remove-legacy-gateway-fallback.md).
 - Root Claude context, legacy OpenCode configuration and obsolete safe-SQL research page. See [change-log/2026-10-11-0741-repository-context-cleanup.md](change-log/2026-10-11-0741-repository-context-cleanup.md).
 
@@ -23,6 +30,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Changed
 
+- Vector Store prioritizes a compact source table with filters and complete chunk inspection; database sync is collapsed and the source map opens in a large dialog without losing the selected source or list filters. See [change-log/2026-10-17-1004-vector-store-source-workspace.md](change-log/2026-10-17-1004-vector-store-source-workspace.md).
 - Settings > AI Assistant > Vector Store opens on an operational view: retrieval status, source totals, index freshness, per-database coverage with re-sync, and a searchable source list with inspection and confirmed removal; the graph map stays available as a secondary view. See [change-log/2026-10-14-1503-vector-store-operational-view.md](change-log/2026-10-14-1503-vector-store-operational-view.md).
 - AI readiness reuses successful probes for five minutes, and Auto keeps its model per conversation with bounded provider-error failover. See [change-log/2026-10-14-1324-ai-model-stability.md](change-log/2026-10-14-1324-ai-model-stability.md).
 - AI Assistant Auto Provider randomly selects an active registered model with the current user's configured provider and keeps that pair throughout each request. See [change-log/2026-10-12-2339-auto-provider-registered-models.md](change-log/2026-10-12-2339-auto-provider-registered-models.md).

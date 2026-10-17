@@ -4,6 +4,7 @@
  */
 
 import dagre from "dagre";
+import { readableSourceType } from "./vector-store-overview";
 import { MarkerType, Position, type Edge, type Node } from "@xyflow/react";
 
 export type VectorStoreMapMode = "store" | "pipeline";
@@ -84,19 +85,22 @@ interface BuildVectorStoreGraphInput {
   expandedSource?: RagSourceDetail | null;
 }
 
-const NODE_DIMENSIONS: Record<VectorStoreGraphNodeData["kind"], { width: number; height: number }> = {
-  backend: { width: 300, height: 132 },
+const NODE_DIMENSIONS: Record<
+  VectorStoreGraphNodeData["kind"],
+  { width: number; height: number }
+> = {
+  backend: { width: 240, height: 108 },
   pipelineStage: { width: 320, height: 128 },
-  sourceGroup: { width: 300, height: 128 },
-  source: { width: 360, height: 136 },
+  sourceGroup: { width: 240, height: 108 },
+  source: { width: 280, height: 112 },
   chunk: { width: 380, height: 126 },
 };
 
 const STORE_COLUMNS: Record<VectorStoreGraphNodeData["kind"], number> = {
-  backend: 64,
-  sourceGroup: 430,
-  source: 830,
-  chunk: 1260,
+  backend: 32,
+  sourceGroup: 328,
+  source: 624,
+  chunk: 960,
   pipelineStage: 0,
 };
 
@@ -116,12 +120,22 @@ export function buildVectorStoreGraph({
   sources,
   databaseLabels = {},
   expandedSource,
-}: BuildVectorStoreGraphInput): { nodes: VectorStoreGraphNode[]; edges: Edge[] } {
+}: BuildVectorStoreGraphInput): {
+  nodes: VectorStoreGraphNode[];
+  edges: Edge[];
+} {
   const nodes: VectorStoreGraphNode[] = [
     createNode("backend", "rag-backend", {
-      label: vectorStatus?.backend || "sqlite_vec",
-      subtitle: vectorStatus?.requiresExternalService ? "External vector backend" : "Desktop local vector backend",
-      status: vectorStatus?.enabled === false ? "disabled" : "enabled",
+      label: vectorStatus?.backend || "Vector store",
+      subtitle: vectorStatus?.requiresExternalService
+        ? "External knowledge index"
+        : "Local knowledge index",
+      status:
+        vectorStatus?.enabled === true
+          ? "enabled"
+          : vectorStatus?.enabled === false
+            ? "disabled"
+            : "unavailable",
       meta: "Vector store",
     }),
   ];
@@ -138,17 +152,30 @@ export function buildVectorStoreGraph({
     : layoutStoreGraph(nodes, edges);
 }
 
-function appendPipeline(nodes: VectorStoreGraphNode[], edges: Edge[], stages: RagPipelineStage[]) {
+function appendPipeline(
+  nodes: VectorStoreGraphNode[],
+  edges: Edge[],
+  stages: RagPipelineStage[],
+) {
   let previousId = "rag-backend";
   stages.forEach((stage, index) => {
     const nodeId = `stage:${stage.key}`;
-    nodes.push(createNode("pipelineStage", nodeId, {
-      label: stage.name,
-      subtitle: `${stage.capabilities?.length || 0} capabilities`,
-      status: stage.status,
-      meta: `Stage ${index + 1}`,
-    }));
-    edges.push(createEdge(`edge:${previousId}:${nodeId}`, previousId, nodeId, "pipelineNext"));
+    nodes.push(
+      createNode("pipelineStage", nodeId, {
+        label: stage.name,
+        subtitle: `${stage.capabilities?.length || 0} capabilities`,
+        status: stage.status,
+        meta: `Stage ${index + 1}`,
+      }),
+    );
+    edges.push(
+      createEdge(
+        `edge:${previousId}:${nodeId}`,
+        previousId,
+        nodeId,
+        "pipelineNext",
+      ),
+    );
     previousId = nodeId;
   });
 }
@@ -162,31 +189,52 @@ function appendSources(
 ) {
   const groupedSources = groupSourcesByType(sources);
   Object.entries(groupedSources)
-    .sort(([left], [right]) => readableSourceType(left).localeCompare(readableSourceType(right)))
+    .sort(([left], [right]) =>
+      readableSourceType(left).localeCompare(readableSourceType(right)),
+    )
     .forEach(([sourceType, groupSources], groupIndex) => {
-    const groupId = `source-type:${sourceType}`;
-    nodes.push(createNode("sourceGroup", groupId, {
-      label: readableSourceType(sourceType),
-      subtitle: `${groupSources.length} indexed source${groupSources.length === 1 ? "" : "s"}`,
-      status: groupSources.some((source) => source.status !== "indexed") ? "mixed" : "indexed",
-      count: groupSources.length,
-      meta: `Group ${groupIndex + 1}`,
-    }));
-    edges.push(createEdge(`edge:rag-backend:${groupId}`, "rag-backend", groupId, "contains"));
+      const groupId = `source-type:${sourceType}`;
+      nodes.push(
+        createNode("sourceGroup", groupId, {
+          label: readableSourceType(sourceType),
+          subtitle: `${groupSources.length} source${groupSources.length === 1 ? "" : "s"}`,
+          status: groupSources.some((source) => source.status !== "indexed")
+            ? "mixed"
+            : "indexed",
+          count: groupSources.length,
+          meta: `Group ${groupIndex + 1}`,
+        }),
+      );
+      edges.push(
+        createEdge(
+          `edge:rag-backend:${groupId}`,
+          "rag-backend",
+          groupId,
+          "contains",
+        ),
+      );
 
-    [...groupSources]
-      .sort((left, right) => left.title.localeCompare(right.title))
-      .slice(0, 8)
-      .forEach((source) => {
-      const sourceId = `source:${source.id}`;
-      nodes.push(createNode("source", sourceId, {
-        label: source.title,
-        subtitle: getSourceDatabaseLabel(source, databaseLabels),
-        status: source.status,
-        meta: source.sourceType,
-      }));
-      edges.push(createEdge(`edge:${groupId}:${sourceId}`, groupId, sourceId, "contains"));
-      });
+      [...groupSources]
+        .sort((left, right) => left.title.localeCompare(right.title))
+        .forEach((source) => {
+          const sourceId = `source:${source.id}`;
+          nodes.push(
+            createNode("source", sourceId, {
+              label: source.title,
+              subtitle: getSourceDatabaseLabel(source, databaseLabels),
+              status: source.status,
+              meta: readableSourceType(source.sourceType),
+            }),
+          );
+          edges.push(
+            createEdge(
+              `edge:${groupId}:${sourceId}`,
+              groupId,
+              sourceId,
+              "contains",
+            ),
+          );
+        });
     });
 
   if (!expandedSource?.chunks?.length) {
@@ -194,23 +242,38 @@ function appendSources(
   }
 
   const expandedNodeId = `source:${expandedSource.id}`;
-  expandedSource.chunks.slice(0, 20).forEach((chunk) => {
+  expandedSource.chunks.forEach((chunk) => {
     const chunkNodeId = `chunk:${chunk.id}`;
-    nodes.push(createNode("chunk", chunkNodeId, {
-      label: chunk.objectName || chunk.metadata?.citation || `Chunk ${Number(chunk.ordinal || 0) + 1}`,
-      subtitle: chunk.schemaName || chunk.chunkType,
-      status: chunk.tokenCount ? `${chunk.tokenCount} tokens` : "chunk",
-      meta: chunk.chunkType,
-    }));
-    edges.push(createEdge(`edge:${expandedNodeId}:${chunkNodeId}`, expandedNodeId, chunkNodeId, "contains"));
+    nodes.push(
+      createNode("chunk", chunkNodeId, {
+        label:
+          chunk.objectName ||
+          chunk.metadata?.citation ||
+          `Chunk ${Number(chunk.ordinal || 0) + 1}`,
+        subtitle: chunk.schemaName || chunk.chunkType,
+        status: chunk.tokenCount ? `${chunk.tokenCount} tokens` : "chunk",
+        meta: chunk.chunkType,
+      }),
+    );
+    edges.push(
+      createEdge(
+        `edge:${expandedNodeId}:${chunkNodeId}`,
+        expandedNodeId,
+        chunkNodeId,
+        "contains",
+      ),
+    );
   });
 }
 
-function getSourceDatabaseLabel(source: RagSource, databaseLabels: Record<string, string>) {
+function getSourceDatabaseLabel(
+  source: RagSource,
+  databaseLabels: Record<string, string>,
+) {
   if (!source.databaseId) {
     return source.accessScope || "global";
   }
-  return databaseLabels[source.databaseId] || source.databaseId;
+  return databaseLabels[source.databaseId] || "Removed connection";
 }
 
 function createNode(
@@ -221,12 +284,20 @@ function createNode(
   return {
     id,
     type: "ragVector",
+    // Controlled nodes need dimensions on the supplied node for MiniMap rendering.
+    initialWidth: NODE_DIMENSIONS[kind].width,
+    initialHeight: NODE_DIMENSIONS[kind].height,
     position: { x: 0, y: 0 },
     data: { ...data, kind },
   };
 }
 
-function createEdge(id: string, source: string, target: string, label: string): Edge {
+function createEdge(
+  id: string,
+  source: string,
+  target: string,
+  label: string,
+): Edge {
   return {
     id,
     source,
@@ -251,25 +322,54 @@ function layoutStoreGraph(nodes: VectorStoreGraphNode[], edges: Edge[]) {
     .filter((id) => nodeById.get(id)?.data.kind === "sourceGroup");
 
   const positioned = new Map<string, VectorStoreGraphNode>();
-  const groupBlocks = groupIds.map((groupId) => buildGroupBlock(groupId, edges, nodeById));
+  const groupBlocks = groupIds.map((groupId) =>
+    buildGroupBlock(groupId, edges, nodeById),
+  );
   const graphHeight = stackHeight(groupBlocks, STORE_GROUP_GAP);
   let cursorY = STORE_TOP_PADDING;
 
   groupBlocks.forEach((groupBlock) => {
-    const groupY = cursorY + centerOffset(groupBlock.height, NODE_DIMENSIONS.sourceGroup.height);
-    const sourceStackHeight = stackHeight(groupBlock.sources, STORE_VERTICAL_GAP);
-    let sourceCursorY = cursorY + centerOffset(groupBlock.height, sourceStackHeight);
+    const groupY =
+      cursorY +
+      centerOffset(groupBlock.height, NODE_DIMENSIONS.sourceGroup.height);
+    const sourceStackHeight = stackHeight(
+      groupBlock.sources,
+      STORE_VERTICAL_GAP,
+    );
+    let sourceCursorY =
+      cursorY + centerOffset(groupBlock.height, sourceStackHeight);
 
-    positionNode(positioned, nodeById, groupBlock.id, STORE_COLUMNS.sourceGroup, groupY);
+    positionNode(
+      positioned,
+      nodeById,
+      groupBlock.id,
+      STORE_COLUMNS.sourceGroup,
+      groupY,
+    );
 
     groupBlock.sources.forEach((sourceBlock) => {
-      const sourceY = sourceCursorY + centerOffset(sourceBlock.height, NODE_DIMENSIONS.source.height);
+      const sourceY =
+        sourceCursorY +
+        centerOffset(sourceBlock.height, NODE_DIMENSIONS.source.height);
       const chunkStackHeight = stackHeightByKind(sourceBlock.chunks, "chunk");
-      let chunkCursorY = sourceCursorY + centerOffset(sourceBlock.height, chunkStackHeight);
+      let chunkCursorY =
+        sourceCursorY + centerOffset(sourceBlock.height, chunkStackHeight);
 
-      positionNode(positioned, nodeById, sourceBlock.id, STORE_COLUMNS.source, sourceY);
+      positionNode(
+        positioned,
+        nodeById,
+        sourceBlock.id,
+        STORE_COLUMNS.source,
+        sourceY,
+      );
       sourceBlock.chunks.forEach((chunkId) => {
-        positionNode(positioned, nodeById, chunkId, STORE_COLUMNS.chunk, chunkCursorY);
+        positionNode(
+          positioned,
+          nodeById,
+          chunkId,
+          STORE_COLUMNS.chunk,
+          chunkCursorY,
+        );
         chunkCursorY += NODE_DIMENSIONS.chunk.height + STORE_VERTICAL_GAP;
       });
 
@@ -280,13 +380,26 @@ function layoutStoreGraph(nodes: VectorStoreGraphNode[], edges: Edge[]) {
   });
 
   const backendY = groupBlocks.length
-    ? STORE_TOP_PADDING + centerOffset(graphHeight, NODE_DIMENSIONS.backend.height)
+    ? STORE_TOP_PADDING +
+      centerOffset(graphHeight, NODE_DIMENSIONS.backend.height)
     : STORE_TOP_PADDING;
-  positionNode(positioned, nodeById, "rag-backend", STORE_COLUMNS.backend, backendY);
+  positionNode(
+    positioned,
+    nodeById,
+    "rag-backend",
+    STORE_COLUMNS.backend,
+    backendY,
+  );
 
   nodes.forEach((node) => {
     if (!positioned.has(node.id)) {
-      positionNode(positioned, nodeById, node.id, STORE_COLUMNS[node.data.kind] || 56, cursorY);
+      positionNode(
+        positioned,
+        nodeById,
+        node.id,
+        STORE_COLUMNS[node.data.kind] || 56,
+        cursorY,
+      );
       cursorY += NODE_DIMENSIONS[node.data.kind].height + STORE_VERTICAL_GAP;
     }
   });
@@ -314,29 +427,46 @@ function buildGroupBlock(
   edges: Edge[],
   nodeById: Map<string, VectorStoreGraphNode>,
 ): GroupLayoutBlock {
-  const sources = childIds(edges, groupId, "source", nodeById).map((sourceId) => {
-    const chunks = childIds(edges, sourceId, "chunk", nodeById);
-    return {
-      id: sourceId,
-      chunks,
-      height: Math.max(NODE_DIMENSIONS.source.height, stackHeightByKind(chunks, "chunk")),
-    };
-  });
+  const sources = childIds(edges, groupId, "source", nodeById).map(
+    (sourceId) => {
+      const chunks = childIds(edges, sourceId, "chunk", nodeById);
+      return {
+        id: sourceId,
+        chunks,
+        height: Math.max(
+          NODE_DIMENSIONS.source.height,
+          stackHeightByKind(chunks, "chunk"),
+        ),
+      };
+    },
+  );
   return {
     id: groupId,
     sources,
-    height: Math.max(NODE_DIMENSIONS.sourceGroup.height, stackHeight(sources, STORE_VERTICAL_GAP)),
+    height: Math.max(
+      NODE_DIMENSIONS.sourceGroup.height,
+      stackHeight(sources, STORE_VERTICAL_GAP),
+    ),
   };
 }
 
 function stackHeight(items: Array<{ height: number }>, gap: number) {
   if (!items.length) return 0;
-  return items.reduce((total, item) => total + item.height, 0) + (items.length - 1) * gap;
+  return (
+    items.reduce((total, item) => total + item.height, 0) +
+    (items.length - 1) * gap
+  );
 }
 
-function stackHeightByKind(ids: string[], kind: VectorStoreGraphNodeData["kind"]) {
+function stackHeightByKind(
+  ids: string[],
+  kind: VectorStoreGraphNodeData["kind"],
+) {
   if (!ids.length) return 0;
-  return ids.length * NODE_DIMENSIONS[kind].height + (ids.length - 1) * STORE_VERTICAL_GAP;
+  return (
+    ids.length * NODE_DIMENSIONS[kind].height +
+    (ids.length - 1) * STORE_VERTICAL_GAP
+  );
 }
 
 function centerOffset(outerHeight: number, innerHeight: number) {
@@ -416,10 +546,4 @@ function groupSourcesByType(sources: RagSource[]) {
   }, {});
 }
 
-export function readableSourceType(sourceType: string) {
-  return sourceType
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
+export { readableSourceType } from "./vector-store-overview";

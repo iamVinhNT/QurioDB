@@ -46,7 +46,10 @@ export function parseServerTimestamp(value?: string | null): Date | null {
 
 /** Returns the schema name encoded in a `database_schema:<db>:<schema>` source id. */
 export function schemaFromSourceId(source: RagSource): string | null {
-  if (source.sourceType !== "database_schema" || !source.id.startsWith(SCHEMA_SOURCE_PREFIX)) {
+  if (
+    source.sourceType !== "database_schema" ||
+    !source.id.startsWith(SCHEMA_SOURCE_PREFIX)
+  ) {
     return null;
   }
   const remainder = source.id.slice(SCHEMA_SOURCE_PREFIX.length);
@@ -66,16 +69,22 @@ export function buildVectorStoreOverview(
     .map((source) => parseServerTimestamp(source.indexed_on))
     .filter((date): date is Date => date !== null)
     .sort((left, right) => left.getTime() - right.getTime());
-  const indexedSources = sources.filter((source) => source.status === "indexed").length;
+  const indexedSources = sources.filter(
+    (source) => source.status === "indexed",
+  ).length;
 
   const coverage = new Map<string, VectorStoreDatabaseCoverage>(
-    databases.map((database) => [database.id, emptyCoverage(database.id, database.label, true)]),
+    databases.map((database) => [
+      database.id,
+      emptyCoverage(database.id, database.label, true),
+    ]),
   );
 
   sources.forEach((source) => {
     if (!source.databaseId) return;
-    const entry = coverage.get(source.databaseId)
-      || emptyCoverage(source.databaseId, source.databaseId, false);
+    const entry =
+      coverage.get(source.databaseId) ||
+      emptyCoverage(source.databaseId, source.databaseId, false);
     coverage.set(source.databaseId, entry);
 
     entry.sourceCount += 1;
@@ -83,13 +92,17 @@ export function buildVectorStoreOverview(
     const schema = schemaFromSourceId(source);
     if (schema && !entry.schemas.includes(schema)) entry.schemas.push(schema);
     const indexedOn = parseServerTimestamp(source.indexed_on);
-    if (indexedOn && (!entry.lastIndexedOn || indexedOn > entry.lastIndexedOn)) {
+    if (
+      indexedOn &&
+      (!entry.lastIndexedOn || indexedOn > entry.lastIndexedOn)
+    ) {
       entry.lastIndexedOn = indexedOn;
     }
   });
 
   const databaseCoverage = [...coverage.values()].sort((left, right) => {
-    if (left.isConnected !== right.isConnected) return left.isConnected ? -1 : 1;
+    if (left.isConnected !== right.isConnected)
+      return left.isConnected ? -1 : 1;
     return left.label.localeCompare(right.label);
   });
   databaseCoverage.forEach((entry) => entry.schemas.sort());
@@ -106,7 +119,11 @@ export function buildVectorStoreOverview(
   };
 }
 
-function emptyCoverage(databaseId: string, label: string, isConnected: boolean): VectorStoreDatabaseCoverage {
+function emptyCoverage(
+  databaseId: string,
+  label: string,
+  isConnected: boolean,
+): VectorStoreDatabaseCoverage {
   return {
     databaseId,
     label,
@@ -116,4 +133,12 @@ function emptyCoverage(databaseId: string, label: string, isConnected: boolean):
     lastIndexedOn: null,
     isConnected,
   };
+}
+
+export function readableSourceType(sourceType: string) {
+  return sourceType
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }

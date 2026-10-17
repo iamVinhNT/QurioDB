@@ -1,14 +1,11 @@
 /**
  * @file VectorStoreSourceList.tsx
- * @description Filterable list of indexed RAG sources with inline inspection and confirmed removal.
+ * @description Filterable source table with a detail sheet and confirmed removal, preserving list state while the map is open.
  */
 
 import { useMemo, useState } from "react";
-import { formatDistanceToNow } from "date-fns";
-import { ChevronDown, Loader2, Search, Trash2 } from "lucide-react";
+import { Loader2, Network, Search, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,133 +16,316 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { aiApi } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
-import { readableSourceType, type RagSource, type RagSourceDetail } from "./vector-store-map-graph";
-import { SourceInspector, sourceTypeCounts } from "./VectorStoreMapNodes";
-import { parseServerTimestamp } from "./vector-store-overview";
+import type { RagSource, RagSourceDetail } from "./vector-store-map-graph";
+import {
+  VectorStoreSourceTable,
+  type SourceSort,
+} from "./VectorStoreSourceTable";
+import { SourceInspector } from "./VectorStoreSourceInspector";
+import {
+  parseServerTimestamp,
+  readableSourceType,
+} from "./vector-store-overview";
 
-const ALL_TYPES = "__all__";
+const ALL = "__all__";
+const SHARED = "__shared__";
+const REMOVED = "__removed__";
 
 interface VectorStoreSourceListProps {
   sources: RagSource[];
   databaseLabels: Record<string, string>;
   isLoading?: boolean;
+  hasError?: boolean;
   deletingSourceId?: string | null;
   onDeleteSource: (source: RagSource) => Promise<unknown>;
+  onOpenMap: (source: RagSource) => void;
 }
 
 export function VectorStoreSourceList({
   sources,
   databaseLabels,
   isLoading,
+  hasError,
   deletingSourceId,
   onDeleteSource,
+  onOpenMap,
 }: VectorStoreSourceListProps) {
-  const [searchText, setSearchText] = useState("");
-  const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
-  const [expandedSourceId, setExpandedSourceId] = useState("");
-  const [sourcePendingDelete, setSourcePendingDelete] = useState<RagSource | null>(null);
-
-  const typeOptions = useMemo(() => sourceTypeCounts(sources), [sources]);
-  const filteredSources = useMemo(() => {
-    const needle = searchText.trim().toLowerCase();
-    return sources.filter((source) => {
-      if (typeFilter !== ALL_TYPES && source.sourceType !== typeFilter) return false;
-      if (!needle) return true;
-      const databaseLabel = source.databaseId ? databaseLabels[source.databaseId] || source.databaseId : "";
-      return `${source.title} ${databaseLabel}`.toLowerCase().includes(needle);
-    });
-  }, [databaseLabels, searchText, sources, typeFilter]);
-
+  const [search, setSearch] = useState("");
+  const [type, setType] = useState(ALL);
+  const [database, setDatabase] = useState(ALL);
+  const [status, setStatus] = useState(ALL);
+  const [sort, setSort] = useState<SourceSort>({
+    key: "indexed",
+    ascending: false,
+  });
+  const [selectedId, setSelectedId] = useState("");
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<RagSource | null>(null);
+  const selectedSource = sources.find((source) => source.id === selectedId);
+  const detailQuery = useQuery({
+    queryKey: ["rag-source-detail", selectedId],
+    queryFn: () => aiApi.getRagSource(selectedId),
+    enabled: isInspectorOpen && Boolean(selectedSource),
+  });
+  const types = [...new Set(sources.map((source) => source.sourceType))].sort();
+  const statuses = [...new Set(sources.map((source) => source.status))].sort();
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return sources
+      .filter((source) => {
+        if (type !== ALL && source.sourceType !== type) return false;
+        if (status !== ALL && source.status !== status) return false;
+        if (database === SHARED && source.databaseId) return false;
+        if (
+          database === REMOVED &&
+          (!source.databaseId || databaseLabels[source.databaseId])
+        )
+          return false;
+        if (
+          ![ALL, SHARED, REMOVED].includes(database) &&
+          source.databaseId !== database
+        )
+          return false;
+        return (
+          !needle ||
+          `${source.title} ${source.databaseId ? databaseLabels[source.databaseId] || source.databaseId : "Shared knowledge"}`
+            .toLowerCase()
+            .includes(needle)
+        );
+      })
+      .sort((left, right) => {
+        const comparison =
+          sort.key === "title"
+            ? left.title.localeCompare(right.title)
+            : (parseServerTimestamp(left.indexed_on)?.getTime() || 0) -
+              (parseServerTimestamp(right.indexed_on)?.getTime() || 0);
+        return (
+          (sort.ascending ? comparison : -comparison) ||
+          left.id.localeCompare(right.id)
+        );
+      });
+  }, [sources, databaseLabels, search, type, database, status, sort]);
+  const hasFilters = Boolean(
+    search || type !== ALL || database !== ALL || status !== ALL,
+  );
+  const toggleSort = (key: "title" | "indexed") =>
+    setSort((current) => ({
+      key,
+      ascending: current.key === key ? !current.ascending : key === "title",
+    }));
   const confirmDelete = async () => {
-    if (!sourcePendingDelete) return;
+    if (!pendingDelete) return;
     try {
-      await onDeleteSource(sourcePendingDelete);
-      if (expandedSourceId === sourcePendingDelete.id) setExpandedSourceId("");
-      setSourcePendingDelete(null);
+      await onDeleteSource(pendingDelete);
+      if (selectedId === pendingDelete.id) setSelectedId("");
+      setPendingDelete(null);
     } catch {
-      // The caller reports the failure; keep the dialog open so the user can retry or cancel.
+      // The caller reports the failure. Keep the confirmation open for retry.
     }
   };
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/50 bg-background/60">
-      <div className="flex flex-col gap-3 border-b border-border/50 p-4 md:flex-row md:items-center">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            placeholder="Search sources by title or database"
-            className="h-9 rounded-lg pl-9 text-xs"
-            aria-label="Search vector store sources"
-          />
+    <section
+      className="overflow-hidden rounded-xl border border-border/60 bg-background/60"
+      aria-label="Indexed sources"
+    >
+      <div className="space-y-3 border-b border-border/50 p-4">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-semibold">Sources</h3>
+          <span className="text-xs text-muted-foreground" aria-live="polite">
+            {isLoading ? "Loading…" : `${filtered.length} of ${sources.length}`}
+          </span>
         </div>
-        <Select value={typeFilter} onValueChange={(value) => setTypeFilter(String(value || ALL_TYPES))}>
-          <SelectTrigger className="h-9 w-full rounded-lg text-xs md:w-56" aria-label="Filter sources by type">
-            <span className="flex-1 truncate text-left">
-              {typeFilter === ALL_TYPES ? "All source types" : readableSourceType(typeFilter)}
-            </span>
-          </SelectTrigger>
-          <SelectContent align="end" className="rounded-xl p-1">
-            <SelectItem value={ALL_TYPES} className="rounded-lg">All source types ({sources.length})</SelectItem>
-            {typeOptions.map((option) => (
-              <SelectItem key={option.type} value={option.type} className="rounded-lg">
-                {readableSourceType(option.type)} ({option.count})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="shrink-0 text-[11px] font-semibold text-muted-foreground tabular-nums">
-          {filteredSources.length} of {sources.length}
-        </div>
-      </div>
-
-      <div className="space-y-2 p-4">
-        {isLoading ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        ) : filteredSources.length ? (
-          filteredSources.map((source) => (
-            <SourceRow
-              key={source.id}
-              source={source}
-              databaseLabels={databaseLabels}
-              isExpanded={expandedSourceId === source.id}
-              isDeleting={deletingSourceId === source.id}
-              onToggle={() => setExpandedSourceId((current) => (current === source.id ? "" : source.id))}
-              onDelete={() => setSourcePendingDelete(source)}
+        <p className="text-xs text-muted-foreground">
+          Sources are schemas, queries or documents. Each is split into
+          searchable sections called chunks.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-48 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search by source name or database…"
+              aria-label="Search vector store sources"
+              className="pl-9"
             />
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 py-8 text-center text-sm text-muted-foreground">
-            {sources.length ? "No sources match these filters." : "No sources indexed yet. Sync a database above or add sources under RAG Index."}
           </div>
-        )}
+          <SourceFilter
+            label="Database"
+            value={database}
+            onChange={setDatabase}
+            options={[
+              { value: ALL, label: "All databases" },
+              ...Object.entries(databaseLabels)
+                .sort(([, a], [, b]) => a.localeCompare(b))
+                .map(([value, label]) => ({ value, label })),
+              { value: SHARED, label: "Shared knowledge" },
+              { value: REMOVED, label: "Removed connections" },
+            ]}
+          />
+          <SourceFilter
+            label="Source type"
+            value={type}
+            onChange={setType}
+            options={[
+              { value: ALL, label: "All types" },
+              ...types.map((value) => ({
+                value,
+                label: readableSourceType(value),
+              })),
+            ]}
+          />
+          <SourceFilter
+            label="Status"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: ALL, label: "All statuses" },
+              ...statuses.map((value) => ({ value, label: value })),
+            ]}
+          />
+          {hasFilters ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearch("");
+                setDatabase(ALL);
+                setType(ALL);
+                setStatus(ALL);
+              }}
+            >
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
       </div>
+      <VectorStoreSourceTable
+        sources={filtered}
+        databaseLabels={databaseLabels}
+        selectedId={selectedId}
+        deletingSourceId={deletingSourceId}
+        sort={sort}
+        onSort={toggleSort}
+        onInspect={(id) => {
+          setSelectedId(id);
+          setIsInspectorOpen(true);
+        }}
+        onDelete={setPendingDelete}
+      />
+      {isLoading ? (
+        <div
+          role="status"
+          className="flex items-center justify-center gap-2 p-8 text-xs text-muted-foreground"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading sources…
+        </div>
+      ) : !filtered.length ? (
+        <p className="p-8 text-center text-sm text-muted-foreground">
+          {hasError
+            ? "Sources could not be loaded. Refresh to try again."
+            : sources.length
+              ? "No sources match these filters."
+              : "No sources yet. Add a source or expand Database sync to index a connection."}
+        </p>
+      ) : null}
 
-      <Dialog open={Boolean(sourcePendingDelete)} onOpenChange={(open) => !open && setSourcePendingDelete(null)}>
+      <Sheet
+        open={isInspectorOpen && Boolean(selectedSource)}
+        onOpenChange={setIsInspectorOpen}
+      >
+        <SheetContent className="data-[side=right]:w-full data-[side=right]:sm:max-w-md">
+          <SheetHeader className="shrink-0 border-b border-border/50 pr-12">
+            <div className="flex items-center justify-between gap-2">
+              <SheetTitle>Source details</SheetTitle>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label="Show in map"
+                title="Show in map"
+                onClick={() => {
+                  if (!selectedSource) return;
+                  setIsInspectorOpen(false);
+                  onOpenMap(selectedSource);
+                }}
+              >
+                <Network className="h-4 w-4" />
+              </Button>
+            </div>
+            <SheetDescription className="sr-only">
+              Inspect indexed content and its searchable chunks.
+            </SheetDescription>
+          </SheetHeader>
+          {selectedSource ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <SourceInspector
+                key={selectedSource.id}
+                source={selectedSource}
+                detail={detailQuery.data as RagSourceDetail | undefined}
+                databaseLabels={databaseLabels}
+                isLoading={detailQuery.isFetching}
+                hasError={detailQuery.isError}
+                onRetry={() => {
+                  void detailQuery.refetch();
+                }}
+              />
+            </div>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+      <Dialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) =>
+          !open && !deletingSourceId && setPendingDelete(null)
+        }
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold">Remove source from the vector store?</DialogTitle>
+            <DialogTitle>Remove source from the vector store?</DialogTitle>
             <DialogDescription>
-              This deletes <span className="font-semibold text-foreground">{sourcePendingDelete?.title}</span> with
-              its chunks and embeddings. The assistant stops retrieving it until it is indexed again.
-              Your database and files are not changed.
+              This removes{" "}
+              <strong className="text-foreground">
+                {pendingDelete?.title}
+              </strong>{" "}
+              and its chunks and embeddings. The assistant stops retrieving it
+              until indexed again. Your database and files are not changed.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSourcePendingDelete(null)}>Cancel</Button>
+            <Button
+              variant="outline"
+              disabled={Boolean(deletingSourceId)}
+              onClick={() => setPendingDelete(null)}
+            >
+              Cancel
+            </Button>
             <Button
               variant="destructive"
-              className="gap-2"
               disabled={Boolean(deletingSourceId)}
               onClick={confirmDelete}
             >
-              {deletingSourceId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {deletingSourceId ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
               Remove source
             </Button>
           </DialogFooter>
@@ -155,86 +335,37 @@ export function VectorStoreSourceList({
   );
 }
 
-function SourceRow({
-  source,
-  databaseLabels,
-  isExpanded,
-  isDeleting,
-  onToggle,
-  onDelete,
+function SourceFilter({
+  label,
+  value,
+  onChange,
+  options,
 }: {
-  source: RagSource;
-  databaseLabels: Record<string, string>;
-  isExpanded: boolean;
-  isDeleting: boolean;
-  onToggle: () => void;
-  onDelete: () => void;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
 }) {
-  const detailQuery = useQuery({
-    queryKey: ["rag-source-detail", source.id],
-    queryFn: () => aiApi.getRagSource(source.id),
-    enabled: isExpanded,
-  });
-  const indexedOn = parseServerTimestamp(source.indexed_on);
-  const isIndexed = source.status === "indexed";
-  const scopeLabel = source.databaseId
-    ? databaseLabels[source.databaseId] || source.databaseId
-    : source.accessScope || "global";
-
   return (
-    <div className="rounded-lg border border-border/50 bg-background/70">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={onToggle}
-          aria-expanded={isExpanded}
-          aria-label={`${isExpanded ? "Hide" : "Inspect"} ${source.title}`}
-        >
-          <span
-            className={cn("h-2 w-2 shrink-0 rounded-full", isIndexed ? "bg-emerald-500" : "bg-amber-500")}
-            title={source.status}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold" title={source.title}>{source.title}</span>
-            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-              <span>{readableSourceType(source.sourceType)}</span>
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
-              <span className="truncate">{scopeLabel}</span>
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
-              <span title={indexedOn?.toLocaleString()}>
-                {indexedOn ? `Indexed ${formatDistanceToNow(indexedOn, { addSuffix: true })}` : "Not indexed yet"}
-              </span>
-            </span>
-          </span>
-          {!isIndexed ? (
-            <Badge variant="outline" className="shrink-0 rounded-md border-amber-500/30 text-[10px] font-bold text-amber-600">
-              {source.status}
-            </Badge>
-          ) : null}
-          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", isExpanded && "rotate-180")} />
-        </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-          onClick={onDelete}
-          disabled={isDeleting}
-          aria-label={`Remove ${source.title}`}
-        >
-          {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-        </Button>
-      </div>
-      {isExpanded ? (
-        <div className="border-t border-border/40 p-3">
-          <SourceInspector
-            source={source}
-            detail={detailQuery.data as RagSourceDetail | undefined}
-            databaseLabels={databaseLabels}
-            isLoading={detailQuery.isFetching}
-          />
-        </div>
-      ) : null}
-    </div>
+    <Select
+      value={value}
+      onValueChange={(value) => onChange(String(value || ALL))}
+    >
+      <SelectTrigger
+        className="h-8 w-auto min-w-28 max-w-52 text-xs"
+        aria-label={`Filter sources by ${label.toLowerCase()}`}
+      >
+        <span className="truncate">
+          {options.find((option) => option.value === value)?.label}
+        </span>
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
