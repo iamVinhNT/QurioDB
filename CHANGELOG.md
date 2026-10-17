@@ -6,6 +6,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Fixed
 
+- AI activity progress keeps the final step's shadow visible inside the collapsible timeline. See [change-log/2026-10-17-0923-ai-progress-last-step-clipping.md](change-log/2026-10-17-0923-ai-progress-last-step-clipping.md).
 - CSV export now honors encoding bytes, adds Unicode BOMs for Excel, rejects unrepresentable text, and protects formula cells while preserving valid numbers. See [change-log/2026-10-13-2359-csv-export-encoding-safety.md](change-log/2026-10-13-2359-csv-export-encoding-safety.md).
 
 ### Removed

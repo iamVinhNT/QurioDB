@@ -66,7 +66,7 @@ export const ReasoningSection = React.memo(({
       )}>
         <div className="min-h-0">
           {!showThought ? null : hasSteps ? (
-            <div className="relative ml-3 pl-5 border-l border-primary/20 flex flex-col gap-2">
+            <div className="relative ml-3 pl-5 pr-1 py-1 border-l border-primary/20 flex flex-col gap-2">
               {steps.map((step, idx) => {
                 const isActiveStep = step.status === "active" || (idx === steps.length - 1 && isGeneratingSQL);
 
