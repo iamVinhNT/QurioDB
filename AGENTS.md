@@ -2,6 +2,8 @@
 
 Desktop-first database management and analytics app (Bun/Turbo monorepo: `apps/web` React, `apps/api` FastAPI, `apps/desktop` Tauri 2). The packaged desktop app is the priority target: the Tauri shell bundles the web UI and runs the API as a local sidecar. Judge every backend or frontend change by its effect on the packaged desktop app, not only on browser dev.
 
+Product: single-user-first, local. SQL Lab (browse databases, edit and run SQL), an AI Assistant (text-to-SQL with RAG/GraphRAG), connections to Postgres, MySQL, MongoDB, Redis and others, a dashboard, file import and a Markdown knowledge base. Users are analysts and developers working on their own machine.
+
 ## Commands
 
 Repo docs are written for Windows/PowerShell. On Linux use the forms below and skip `.ps1`/`.bat` scripts.
@@ -31,7 +33,6 @@ Repo docs are written for Windows/PowerShell. On Linux use the forms below and s
 
 - Sidecar lifecycle (spawn, readiness polling, restart, kill) is in `apps/desktop/src-tauri/src/backend.rs`, not `lib.rs`.
 - The API is FastAPI, not Flask, despite stale comments. Routers are wired in `apps/api/core/routers.py`. Keep `routes/` -> `services/` -> `models/` boundaries.
-- Stale or wrong: `.codex/*`, `bts.jsonc` (describes Next.js/Prisma/tRPC/Postgres), `apps/api/database/prisma-*`. The real stack is React Router + FastAPI + SQLAlchemy + SQLite. `.agents/rules/code-change-quality-gate.md` mentions a `Project-Context.md` that does not exist.
 - Metadata DB: `~/.quriodb/quriodb.db`. There is no migration framework: add model columns plus an idempotent migration function in `apps/api/services/startup.py` (`setup_database` runs `create_all`, migrations, seeds). First run seeds `admin` / `password123`.
 - Desktop runs with `DISABLE_AUTH=true` (sidecar) and `VITE_DISABLE_AUTH=true` (web build). Browser mode uses JWT.
 - AI provider keys live encrypted in the metadata DB (Settings -> AI Assistant), not in env vars.
