@@ -44,7 +44,7 @@ Repo docs are written for Windows/PowerShell. On Linux use the forms below and s
 
 - Nearest nested file applies: `apps/api/AGENTS.md`, `apps/web/AGENTS.md`, `apps/desktop/AGENTS.md`.
 - Reference docs: `docs/README.md` indexes `docs/architecture/*` (design) and `docs/modules/*` (per feature). Open only the page for the area you change. `docs/` is gitignored, so it may be absent; the code is the truth, and fix a doc if you find it wrong.
-- Rules: `.agents/rules/code-change-quality-gate.md` (applies to every code change) and `.agents/rules/clean-code.md`. Skills: `.agents/skills/*` (backend-developer, frontend-developer, commit-convention, business-analysis).
+- Rules: `.agents/rules/code-change-quality-gate.md` (applies to every code change) and `.agents/rules/clean-code.md` (`.agents/` is gitignored and local-only). Skills: `.agents/skills/*` (backend-developer, frontend-developer, commit-convention, business-analysis).
 - Prefer a code-intelligence tool (CodeGraph MCP) or targeted search over reading whole files. For cross-layer work trace UI -> API client -> route -> service -> (desktop sidecar) before editing.
 
 ## Working rules

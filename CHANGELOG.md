@@ -17,6 +17,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Removed
 
+- Stop tracking `docs/` and `.agents/` files in git; both stay on disk and gitignored as local-only context. See [change-log/2026-10-20-1600-untrack-docs-and-agents.md](change-log/2026-10-20-1600-untrack-docs-and-agents.md).
 - Remove obsolete Better-T-Stack config (`bts.jsonc`) and the unused Prisma schema and migrations under `apps/api/database/`; the real stack is React Router + FastAPI + SQLAlchemy + SQLite. `AGENTS.md` gains a product summary. See [change-log/2026-10-20-1520-remove-stale-stack-config.md](change-log/2026-10-20-1520-remove-stale-stack-config.md).
 - Remove the Vector Store Map search/count toolbar so the graph fills the content area. See [change-log/2026-10-17-1120-remove-map-search.md](change-log/2026-10-17-1120-remove-map-search.md).
 - Remove the Sources / How retrieval works switcher and guide from the Vector Store map; it opens directly on Sources. See [change-log/2026-10-17-1119-remove-map-view-switcher.md](change-log/2026-10-17-1119-remove-map-view-switcher.md).
