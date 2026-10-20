@@ -28,6 +28,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Added
 
+- Add `bun run typecheck` and `bun run verify` (`scripts/verify.sh`) and a CI workflow that runs the full check on pull requests and pushes to `dev`. See [change-log/2026-10-20-1643-add-verify-script-and-ci.md](change-log/2026-10-20-1643-add-verify-script-and-ci.md).
 - AI SQL GraphRAG with reviewed schema/business relationships and a Markdown Knowledge Base workspace, immutable publication, scoped context preview and versioned citations. See [change-log/2026-10-17-1043-graphrag-knowledge-base-implementation.md](change-log/2026-10-17-1043-graphrag-knowledge-base-implementation.md).
 
 - Design and implementation plan for AI SQL GraphRAG and a Markdown knowledge-base workspace, including publication, provenance, graph retrieval and desktop verification. See [change-log/2026-10-17-1002-graphrag-knowledge-base-plan.md](change-log/2026-10-17-1002-graphrag-knowledge-base-plan.md).

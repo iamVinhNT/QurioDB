@@ -10,11 +10,12 @@ Repo docs are written for Windows/PowerShell. On Linux use the forms below and s
 
 - Install: `bun install` and `pip install -r apps/api/requirements.txt`
 - Dev: `bun run dev` (web + api), `bun run dev:web` (Vite :3001, proxies `/api` to :5000), `bun run dev:backend` (FastAPI on 127.0.0.1:5000)
+- Fast check: `bun run typecheck` (web typecheck, about 6-25 s). Full check: `bun run verify` (typecheck, web tests and API tests, about 65 s). Baseline on 2026-10-20: 780 web tests and 756 API tests pass (3 skipped). Both run `scripts/verify.sh`, which uses `apps/api/venv` for the API tests because `python` may resolve to a pyenv shim.
 - Web tests: `cd apps/web && bunx vitest run [path] [-t "name"]`
 - Web typecheck: `cd apps/web && bunx tsc --noEmit`
 - API tests: `cd apps/api && python -m pytest [path::test]`; AI/RAG regression suite: `python -m pytest -m rag` (or `bun run test:rag`)
 - Rust tests: `cd apps/desktop/src-tauri && cargo test`
-- `bun run lint` and `bun run check-types` run Turbo, but no workspace defines those scripts, so they check nothing. Use the typecheck and test commands above.
+- `bun run lint` and `bun run check-types` run Turbo, but no workspace defines those scripts, so they check nothing. Use the check commands above. CI (`.github/workflows/ci.yml`) runs `scripts/verify.sh full` on pull requests and pushes to `dev`; it has not been run on GitHub yet, so trigger it once with `workflow_dispatch`.
 - Format: `bun run format`
 - Desktop build: Windows `bun run desktop:build`; Linux `bun run desktop:sidecar:linux`, `desktop:build:linux`, `desktop:dev:linux`
 - Version: set `QURIODB_VERSION` in root `.env`, then `bun run version:sync` (`version:check` to verify)
