@@ -29,12 +29,12 @@ The desktop app is built with Tauri 2 and includes an embedded Python FastAPI si
 
 ### ⬇️ Download Windows Installers
 
-- [Download Windows Installer (v0.1.6)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.6/QurioDB_0.1.6_x64_en-US.msi)
-- [Download Windows Setup (v0.1.6)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.6/QurioDB_0.1.6_x64-setup.exe)
+- [Download Windows Installer (v0.1.7)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.7/QurioDB_0.1.7_x64_en-US.msi)
+- [Download Windows Setup (v0.1.7)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.7/QurioDB_0.1.7_x64-setup.exe)
 
 ### 🐧 Download Linux Installers
-- [Download Linux Package (v0.1.6)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.6/QurioDB_0.1.6_amd64.deb)
-- [Download Linux AppImage (v0.1.6)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.6/QurioDB_0.1.6_amd64.AppImage)
+- [Download Linux Package (v0.1.7)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.7/QurioDB_0.1.7_amd64.deb)
+- [Download Linux AppImage (v0.1.7)](https://github.com/trungvinh2102/QurioDB/releases/download/v0.1.7/QurioDB_0.1.7_amd64.AppImage)
 
 This link points to the current stable release. To download the latest official version, visit the [Releases Page](https://github.com/trungvinh2102/QurioDB/releases).
 
@@ -304,4 +304,4 @@ Internal Development - Nguyễn Trung Vĩnh.
 
 ---
 
-QurioDB - v0.1.6
+QurioDB - v0.1.7
