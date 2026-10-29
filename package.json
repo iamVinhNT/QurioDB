@@ -33,6 +33,7 @@
     "clean": "rm -rf node_modules .turbo",
     "test:rag": "cd apps/api && python -m pytest -m rag",
     "typecheck": "bash scripts/verify.sh fast",
+    "test:changed": "bash scripts/verify.sh changed",
     "verify": "bash scripts/verify.sh full"
   },
   "devDependencies": {

@@ -28,6 +28,7 @@ All notable changes to QurioDB are recorded here. Format follows [Keep a Changel
 
 ### Added
 
+- Add `bun run test:changed`, which runs the web tests related to uncommitted changes and the API tests that mention the changed modules, and drop the per-suite test counts from `AGENTS.md`. See [change-log/2026-10-20-2234-add-test-changed.md](change-log/2026-10-20-2234-add-test-changed.md).
 - Add `bun run typecheck` and `bun run verify` (`scripts/verify.sh`) and a CI workflow that runs the full check on pull requests and pushes to `dev`. See [change-log/2026-10-20-1643-add-verify-script-and-ci.md](change-log/2026-10-20-1643-add-verify-script-and-ci.md).
 - AI SQL GraphRAG with reviewed schema/business relationships and a Markdown Knowledge Base workspace, immutable publication, scoped context preview and versioned citations. See [change-log/2026-10-17-1043-graphrag-knowledge-base-implementation.md](change-log/2026-10-17-1043-graphrag-knowledge-base-implementation.md).
 
