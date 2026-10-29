@@ -23,6 +23,7 @@ describe("useSettingsStore", () => {
     expect(state.theme).toBe("system");
     expect(state.language).toBe("en");
     expect(state.editorFontSize).toBe(14);
+    expect(state.autoCheckUpdates).toBe(true);
   });
 
   it("should update theme", () => {

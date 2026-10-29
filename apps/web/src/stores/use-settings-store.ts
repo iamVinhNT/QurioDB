@@ -30,6 +30,9 @@ export interface SettingsState {
   csvDelimiter: "," | ";";
   resultEncoding: string;
 
+  // Updates (desktop)
+  autoCheckUpdates: boolean;
+
   // Actions
   setTheme: (theme: "light" | "dark" | "system") => void;
   setLanguage: (lang: "en" | "vi") => void;
@@ -65,6 +68,8 @@ const defaultSettings = {
   dateTimeFormat: "YYYY-MM-DD HH:mm:ss",
   csvDelimiter: "," as const,
   resultEncoding: "UTF-8",
+
+  autoCheckUpdates: true,
 };
 
 export function sanitizePersistedSettingsState(

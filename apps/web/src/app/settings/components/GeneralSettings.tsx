@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ThemeCard } from "./general-settings/ThemeCard";
+import { AboutUpdatesCard } from "./general-settings/AboutUpdatesCard";
 
 interface GeneralSettingsProps {
   theme: string;
@@ -174,6 +175,11 @@ export function GeneralSettings({
               </div>
             </CardContent>
           </Card>
+
+          <AboutUpdatesCard
+            autoCheckUpdates={settings.autoCheckUpdates}
+            onAutoCheckChange={(enabled) => updateGeneral({ autoCheckUpdates: enabled })}
+          />
         </div>
       </div>
     </TooltipProvider>

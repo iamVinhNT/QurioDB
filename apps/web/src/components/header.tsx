@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModeToggle } from "./mode-toggle";
+import { UpdateIndicator } from "./update-indicator";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { useAuth, IS_AUTH_DISABLED } from "@/hooks/use-auth";
@@ -128,6 +129,7 @@ export function Header() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
+          <UpdateIndicator />
           <ModeToggle />
 
           {/* User Profile - Hidden completely in Disable Auth mode */}

@@ -2,6 +2,7 @@
 //! @description Main Tauri application setup and Linux WebView configuration.
 
 mod backend;
+mod update;
 
 use backend::{BackendManager, BackendStatus};
 use tauri::{Manager, RunEvent, State, WindowEvent};
@@ -58,7 +59,9 @@ pub fn run() {
         .manage(BackendManager::default())
         .invoke_handler(tauri::generate_handler![
             get_backend_status,
-            restart_backend
+            restart_backend,
+            update::check_for_update,
+            update::open_release_page
         ])
         .setup(|app| {
             configure_linux_webkit_ime(app)?;
